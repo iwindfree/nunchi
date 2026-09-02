@@ -17,6 +17,9 @@ pub struct Config {
     /// 여기에 추가하면 재빌드 없이 지원 범위가 넓어진다 — `crate::rules` 참조.
     #[serde(default)]
     pub framework: crate::rules::FrameworkRules,
+    /// 도메인 용어 사전. 프레임워크 규칙과 같은 이유로 데이터에 둔다.
+    #[serde(default)]
+    pub semantic: crate::semantic::Synonyms,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -118,6 +118,8 @@ pub fn estimate_tokens(text: &str) -> usize {
 #[derive(Debug, Clone)]
 pub struct PackOptions {
     pub budget: usize,
+    /// 도메인 용어 사전. 질의를 확장해 언어 간 격차를 메운다.
+    pub synonyms: crate::semantic::Synonyms,
     pub weights: RankWeights,
     pub seed_limit: usize,
     pub candidate_limit: usize,
@@ -128,6 +130,7 @@ impl Default for PackOptions {
     fn default() -> Self {
         PackOptions {
             budget: 4000,
+            synonyms: Default::default(),
             weights: RankWeights::default(),
             seed_limit: 12,
             candidate_limit: 120,
@@ -145,7 +148,8 @@ pub fn build_pack(
     opts: &PackOptions,
 ) -> Result<Pack> {
     // ── 1. 시드: FTS5 BM25 ──
-    let hits = store.search(task, opts.seed_limit)?;
+    let expanded = opts.synonyms.expand_query(task);
+    let hits = store.search(&expanded, opts.seed_limit)?;
     let max_bm25 = hits.first().map(|h| h.score).unwrap_or(1.0).max(1e-6);
 
     let mut bm25: HashMap<String, f32> = HashMap::new();

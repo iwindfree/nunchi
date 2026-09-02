@@ -12,7 +12,7 @@ use std::collections::{HashSet, VecDeque};
 use std::path::Path;
 
 /// 스키마 버전. 올리면 인덱스를 자동 전체 재빌드한다(PLAN.md 3.6절).
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -63,6 +63,9 @@ CREATE TABLE IF NOT EXISTS repos (
 CREATE VIRTUAL TABLE IF NOT EXISTS nodes_fts USING fts5(
     id UNINDEXED,
     name,
+    -- 식별자를 분해한 토큰. `deleteComment` 를 "delete Comment"로도 찾게 한다.
+    -- 자연어 질의가 카멜케이스에 닿는 대부분의 경우가 여기서 해결된다.
+    tokens,
     signature,
     doc,
     path,
@@ -336,7 +339,8 @@ impl Store for SqliteStore {
             )?;
             let mut del_fts = tx.prepare("DELETE FROM nodes_fts WHERE id = ?1")?;
             let mut ins_fts = tx.prepare(
-                "INSERT INTO nodes_fts (id, name, signature, doc, path) VALUES (?1,?2,?3,?4,?5)",
+                "INSERT INTO nodes_fts (id, name, tokens, signature, doc, path)
+                 VALUES (?1,?2,?3,?4,?5,?6)",
             )?;
 
             for n in nodes {
@@ -360,6 +364,7 @@ impl Store for SqliteStore {
                 ins_fts.execute(params![
                     n.id.as_str(),
                     n.name,
+                    crate::semantic::expand_for_index(&n.name, n.path.as_deref()),
                     n.signature,
                     n.doc,
                     n.path
@@ -441,7 +446,7 @@ impl Store for SqliteStore {
                     -- 컬럼 가중치: name > signature > doc > path.
                     -- 경로에는 디렉터리 이름이 잔뜩 들어 있어 가중치를 주면
                     -- 파일 노드가 상위를 점령한다(실측에서 확인).
-                    bm25(nodes_fts, 0.0, 10.0, 3.0, 2.0, 0.5) AS score
+                    bm25(nodes_fts, 0.0, 10.0, 6.0, 3.0, 2.0, 0.5) AS score
              FROM nodes_fts
              JOIN nodes n ON n.id = nodes_fts.id
              WHERE nodes_fts MATCH ?1

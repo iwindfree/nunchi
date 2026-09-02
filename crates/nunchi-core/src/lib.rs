@@ -18,6 +18,7 @@ pub mod pack;
 pub mod path;
 pub mod resolve;
 pub mod rules;
+pub mod semantic;
 pub mod store;
 
 pub use config::Config;

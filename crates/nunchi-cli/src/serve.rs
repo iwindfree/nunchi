@@ -158,6 +158,7 @@ impl ServerHandler for NunchiServer {
                 let opts = pack::PackOptions {
                     budget,
                     weights: self.config.rank,
+                    synonyms: self.config.semantic.clone(),
                     ..Default::default()
                 };
                 let result =
@@ -167,7 +168,9 @@ impl ServerHandler for NunchiServer {
             "nunchi_find" => {
                 let query = arg_str(&request, "query")?;
                 let limit = arg_usize(&request, "limit", 20);
-                let hits = store.search(&query, limit).map_err(err)?;
+                let hits = store
+                    .search(&self.config.semantic.expand_query(&query), limit)
+                    .map_err(err)?;
                 let items: Vec<_> = hits
                     .iter()
                     .map(|h| {

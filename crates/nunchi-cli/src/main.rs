@@ -1,6 +1,7 @@
 //! nunchi CLI — 단일 바이너리, 서브커맨드 (PLAN.md 용어 절)
 
 mod serve;
+mod tui;
 mod watch;
 
 use anyhow::{Context, Result};
@@ -109,12 +110,19 @@ fn main() -> Result<()> {
         }
         Command::Pack { task, budget, json } => cmd_pack(cli.config, &task, budget, json),
         Command::Rules { toml: as_toml } => cmd_rules(cli.config, as_toml),
-        Command::Tui => not_yet("tui", "Phase 3.5 — ratatui"),
+        Command::Tui => {
+            let config_path = match cli.config.clone() {
+                Some(p) => p,
+                None => Config::discover(&std::env::current_dir()?)
+                    .context("nunchi.toml을 찾을 수 없습니다")?,
+            };
+            let (config, db_path) = resolve(Some(config_path.clone()))?;
+            if !db_path.exists() {
+                anyhow::bail!("인덱스가 없습니다. `nunchi index`를 먼저 실행하세요.");
+            }
+            tui::run(config, config_path, db_path)
+        }
     }
-}
-
-fn not_yet(name: &str, phase: &str) -> Result<()> {
-    anyhow::bail!("`nunchi {name}`은 아직 구현되지 않았습니다 ({phase}). PLAN.md 4절 참조.")
 }
 
 /// 설정 파일 위치와 인덱스 경로를 함께 해결한다.
@@ -172,6 +180,7 @@ fn cmd_init(repos: Vec<PathBuf>, name: Option<String>, force: bool) -> Result<()
         // 비워두면 내장 규칙(Spring + React)이 적용된다.
         // `nunchi rules`로 현재 규칙을 확인하고 nunchi.toml에 추가해 확장한다.
         framework: Default::default(),
+        semantic: Default::default(),
     };
     config.save(&target)?;
 
@@ -232,10 +241,15 @@ fn cmd_index(config_arg: Option<PathBuf>, rebuild: bool, watch: bool) -> Result<
     let (config, db_path) = resolve(config_arg)?;
     // 캐시는 인덱스와 별도 파일이다 — 워크트리마다 인덱스는 달라도 캐시는 공유한다.
     let cache_path = db_path.with_file_name("extract-cache.db");
-    let mut store = SqliteStore::open(&db_path)?;
+    // --rebuild는 파일부터 지운다. 스키마 버전이 바뀌었을 때 open()이 먼저
+    // 실패하면 안내한 해결책이 동작하지 않는다.
     if rebuild {
-        store.clear()?;
+        for suffix in ["", "-wal", "-shm"] {
+            let p = PathBuf::from(format!("{}{suffix}", db_path.display()));
+            let _ = std::fs::remove_file(p);
+        }
     }
+    let mut store = SqliteStore::open(&db_path)?;
 
     let started = std::time::Instant::now();
     let mut cache = nunchi_core::cache::ExtractCache::open(&cache_path)?;
@@ -391,6 +405,7 @@ fn cmd_pack(config_arg: Option<PathBuf>, task: &str, budget: usize, json: bool) 
     let opts = nunchi_core::pack::PackOptions {
         budget,
         weights: config.rank,
+        synonyms: config.semantic.clone(),
         ..Default::default()
     };
     let pack = nunchi_core::pack::build_pack(&store, &graph, task, &roots, &opts)?;
@@ -461,12 +476,12 @@ method = "POST"
 }
 
 fn cmd_find(config_arg: Option<PathBuf>, query: &str, limit: usize, json: bool) -> Result<()> {
-    let (_, db_path) = resolve(config_arg)?;
+    let (config, db_path) = resolve(config_arg)?;
     if !db_path.exists() {
         anyhow::bail!("인덱스가 없습니다. `nunchi index`를 먼저 실행하세요.");
     }
     let store = SqliteStore::open(&db_path)?;
-    let hits = store.search(query, limit)?;
+    let hits = store.search(&config.semantic.expand_query(query), limit)?;
 
     if json {
         let out: Vec<_> = hits
