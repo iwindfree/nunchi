@@ -54,6 +54,10 @@ impl SupportedLang {
         }
     }
 
+    pub fn language_for(self, path: &Path) -> Language {
+        self.language(path)
+    }
+
     fn language(self, path: &Path) -> Language {
         match self {
             Self::Java => tree_sitter_java::LANGUAGE.into(),

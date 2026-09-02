@@ -1,0 +1,666 @@
+//! 프레임워크 의미론 추출 — Spring / React (PLAN.md 3.9절 Phase 1c)
+//!
+//! 이 계층이 없으면 그래프가 무너진다. Spring은 호출 관계가 **어노테이션과 DI로
+//! 구성**되어 소스에 구문적 호출이 존재하지 않기 때문이다. 실측에서 확인된 바:
+//! RealWorld 인덱싱 시 미해소 호출 상위가 `save`(JPA 리포지터리 — 본문 없음),
+//! `build`/`builder`(Lombok 생성 코드)였다.
+//!
+//! 어노테이션-선언 결합은 tree-sitter 쿼리로 표현하면 취약해서 수동 순회로 처리한다.
+
+use crate::model::Span;
+use crate::rules::FrameworkRules;
+use tree_sitter::Node;
+
+#[derive(Debug, Default, Clone)]
+pub struct FrameworkFacts {
+    pub routes: Vec<RouteFact>,
+    pub beans: Vec<BeanFact>,
+    pub injects: Vec<InjectFact>,
+    pub api_calls: Vec<ApiCallFact>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RouteFact {
+    pub method: String,
+    /// 정규화된 경로 — `/api/orders/{}` 형태
+    pub path: String,
+    /// 원본 표기 (표시용)
+    pub raw_path: String,
+    /// 이 라우트를 처리하는 심볼 이름
+    pub handler: String,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct BeanFact {
+    pub name: String,
+    /// `RestController`, `Service`, `Repository` 등
+    pub stereotype: String,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct InjectFact {
+    /// 주입받는 쪽 (Bean 이름)
+    pub owner: String,
+    /// 주입되는 타입 이름
+    pub injected_type: String,
+    pub how: InjectKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InjectKind {
+    Autowired,
+    Constructor,
+    /// Lombok `@RequiredArgsConstructor` + final 필드
+    FinalField,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ApiCallFact {
+    pub method: String,
+    pub path: String,
+    pub raw_path: String,
+    pub span: Span,
+    /// 경로가 정적으로 결정되지 않는다 — 예: `` `/users${isRegister ? '' : '/login'}` ``.
+    /// 치환이 경로 세그먼트 전체가 아니면 어떤 엔드포인트인지 알 수 없다.
+    /// 연결 실패로 세지 않고 별도로 보고한다.
+    pub dynamic: bool,
+}
+
+/// 경로 템플릿 정규화.
+///
+/// Spring `{id}`, Express/react-router `:id`, JS 템플릿 `${id}`를 모두 `{}`로 만들어
+/// 프런트–백엔드 매칭이 문자열 비교로 끝나게 한다 (PLAN.md 3.9절 `CALLS_API`).
+/// 경로 치환이 세그먼트 전체가 아닌지 판정한다.
+///
+/// `/orders/${id}` 는 경로 파라미터라 `{}` 로 정규화하면 되지만,
+/// `/users${cond ? '' : '/login'}` 은 세그먼트 경계가 아니어서 정적으로 알 수 없다.
+pub fn has_dynamic_segment(raw: &str) -> bool {
+    let trimmed = raw.trim().trim_matches(['"', '\'', '`']);
+    let bytes = trimmed.as_bytes();
+    let mut i = 0;
+    while let Some(pos) = trimmed[i..].find("${") {
+        let start = i + pos;
+        // 치환 앞이 `/` 가 아니면 세그먼트 중간이다.
+        if start == 0 || bytes[start - 1] != b'/' {
+            return true;
+        }
+        let Some(end_rel) = trimmed[start..].find('}') else { return true };
+        let end = start + end_rel + 1;
+        // 치환 뒤가 `/` 또는 끝이 아니면 세그먼트 중간이다.
+        if end < bytes.len() && bytes[end] != b'/' {
+            return true;
+        }
+        i = end;
+    }
+    false
+}
+
+pub fn normalize_route_path(raw: &str) -> String {
+    let trimmed = raw.trim().trim_matches(['"', '\'', '`']);
+    let mut out = String::with_capacity(trimmed.len());
+    let mut chars = trimmed.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        match c {
+            // `${...}` (JS 템플릿) 과 `{...}` (Spring)
+            '$' if chars.peek() == Some(&'{') => {
+                chars.next();
+                for c in chars.by_ref() {
+                    if c == '}' {
+                        break;
+                    }
+                }
+                out.push_str("{}");
+            }
+            '{' => {
+                for c in chars.by_ref() {
+                    if c == '}' {
+                        break;
+                    }
+                }
+                out.push_str("{}");
+            }
+            // `:id` (Express / react-router) — 세그먼트 전체가 파라미터
+            ':' if out.ends_with('/') => {
+                while chars.peek().is_some_and(|c| *c != '/') {
+                    chars.next();
+                }
+                out.push_str("{}");
+            }
+            _ => out.push(c),
+        }
+    }
+
+    // 선행 슬래시 보장 + 후행 슬래시 제거 (`/api/orders/` ≡ `/api/orders`)
+    let mut path = if out.starts_with('/') { out } else { format!("/{out}") };
+    while path.len() > 1 && path.ends_with('/') {
+        path.pop();
+    }
+    path
+}
+
+fn span_of(node: Node) -> Span {
+    Span {
+        start_line: node.start_position().row as u32 + 1,
+        end_line: node.end_position().row as u32 + 1,
+    }
+}
+
+fn text<'a>(node: Node, src: &'a [u8]) -> &'a str {
+    node.utf8_text(src).unwrap_or_default()
+}
+
+// ─────────────────────────── Java / Spring ───────────────────────────
+
+/// 선언 노드에 붙은 어노테이션들을 `(이름, 인자원문)`으로 돌려준다.
+fn annotations_of<'a>(decl: Node<'a>, src: &'a [u8]) -> Vec<(String, Option<String>)> {
+    let mut out = Vec::new();
+    let mut cursor = decl.walk();
+    for child in decl.children(&mut cursor) {
+        if child.kind() != "modifiers" {
+            continue;
+        }
+        let mut mods = child.walk();
+        for m in child.children(&mut mods) {
+            match m.kind() {
+                "marker_annotation" => {
+                    if let Some(n) = m.child_by_field_name("name") {
+                        out.push((text(n, src).to_string(), None));
+                    }
+                }
+                "annotation" => {
+                    let name = m.child_by_field_name("name").map(|n| text(n, src).to_string());
+                    let args = m
+                        .child_by_field_name("arguments")
+                        .map(|a| text(a, src).to_string());
+                    if let Some(name) = name {
+                        out.push((name, args));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
+/// `("/api/orders")` 또는 `(value = "/x", method = RequestMethod.GET)` 에서 경로를 뽑는다.
+fn path_from_args(args: &str) -> Option<String> {
+    // 명명 인자가 있으면 value/path 를 우선한다.
+    for key in ["value = ", "path = ", "value=", "path="] {
+        if let Some(idx) = args.find(key) {
+            let rest = &args[idx + key.len()..];
+            if let Some(s) = first_string_literal(rest) {
+                return Some(s);
+            }
+        }
+    }
+    first_string_literal(args)
+}
+
+fn first_string_literal(s: &str) -> Option<String> {
+    let start = s.find('"')?;
+    let rest = &s[start + 1..];
+    let end = rest.find('"')?;
+    Some(rest[..end].to_string())
+}
+
+/// `method = RequestMethod.POST` → `POST` (접두는 규칙이 정한다)
+fn method_from_args(args: &str, prefix: &str) -> Option<String> {
+    let idx = args.find(prefix)?;
+    let rest = &args[idx + prefix.len()..];
+    let verb: String = rest.chars().take_while(|c| c.is_ascii_alphabetic()).collect();
+    (!verb.is_empty()).then_some(verb)
+}
+
+/// 어노테이션 기반 프레임워크 추출. 규칙은 설정에서 온다(`crate::rules`).
+pub fn extract_annotated(
+    root: Node,
+    src: &[u8],
+    lang: &str,
+    rules: &FrameworkRules,
+) -> FrameworkFacts {
+    let mut facts = FrameworkFacts::default();
+    walk_java(root, src, lang, rules, "", &mut facts);
+    facts
+}
+
+fn walk_java(
+    node: Node,
+    src: &[u8],
+    lang: &str,
+    rules: &FrameworkRules,
+    base_path: &str,
+    facts: &mut FrameworkFacts,
+) {
+    if node.kind() == "class_declaration" {
+        let name = node
+            .child_by_field_name("name")
+            .map(|n| text(n, src).to_string())
+            .unwrap_or_default();
+        let annos = annotations_of(node, src);
+
+        let stereotype = annos
+            .iter()
+            .find(|(a, _)| rules.bean_stereotype(lang, a))
+            .map(|(a, _)| a.clone());
+
+        // 클래스 레벨 @RequestMapping은 메서드 경로의 접두가 된다.
+        let class_base = annos
+            .iter()
+            .find(|(a, _)| rules.is_base_path_annotation(lang, a))
+            .and_then(|(_, args)| args.as_deref())
+            .and_then(path_from_args)
+            .map(|p| normalize_route_path(&p))
+            .unwrap_or_default();
+        let class_base = if class_base == "/" { String::new() } else { class_base };
+
+        if let Some(stereotype) = &stereotype {
+            facts.beans.push(BeanFact {
+                name: name.clone(),
+                stereotype: stereotype.clone(),
+                span: span_of(node),
+            });
+            collect_java_injections(node, src, lang, rules, &name, facts);
+        }
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            walk_java(child, src, lang, rules, &class_base, facts);
+        }
+        return;
+    }
+
+    if node.kind() == "method_declaration" {
+        let handler = node
+            .child_by_field_name("name")
+            .map(|n| text(n, src).to_string())
+            .unwrap_or_default();
+        for (anno, args) in annotations_of(node, src) {
+            let Some(rule) = rules.route_for(lang, &anno) else { continue };
+            let args_text = args.unwrap_or_default();
+            let method = rule
+                .method_from_args_prefix
+                .as_deref()
+                .and_then(|prefix| method_from_args(&args_text, prefix))
+                .unwrap_or_else(|| rule.method.clone());
+            let raw = path_from_args(&args_text).unwrap_or_default();
+            let suffix = normalize_route_path(&raw);
+            let suffix = if suffix == "/" { String::new() } else { suffix };
+            let full = format!("{base_path}{suffix}");
+            let full = if full.is_empty() { "/".to_string() } else { full };
+
+            facts.routes.push(RouteFact {
+                method,
+                path: full,
+                raw_path: if raw.is_empty() { "/".into() } else { raw },
+                handler: handler.clone(),
+                span: span_of(node),
+            });
+        }
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        walk_java(child, src, lang, rules, base_path, facts);
+    }
+}
+
+/// Bean 클래스의 주입 지점. Spring은 세 가지 형태를 모두 쓴다.
+fn collect_java_injections(
+    class_node: Node,
+    src: &[u8],
+    lang: &str,
+    rules: &FrameworkRules,
+    owner: &str,
+    facts: &mut FrameworkFacts,
+) {
+    let Some(body) = class_node.child_by_field_name("body") else { return };
+    let inject_rules = rules.inject_rules(lang);
+    if inject_rules.is_empty() {
+        return;
+    }
+    let mut cursor = body.walk();
+
+    for member in body.children(&mut cursor) {
+        match member.kind() {
+            "field_declaration" => {
+                let Some(ty) = member.child_by_field_name("type") else { continue };
+                let type_name = text(ty, src).to_string();
+                let annos = annotations_of(member, src);
+                let autowired = inject_rules.iter().any(|r| {
+                    r.annotations
+                        .iter()
+                        .any(|want| annos.iter().any(|(a, _)| a == want))
+                });
+                // Lombok @RequiredArgsConstructor 관용구 — final 필드가 곧 생성자 주입이다.
+                let is_final = inject_rules.iter().any(|r| r.final_fields)
+                    && text(member, src).contains("final ");
+
+                if autowired || is_final {
+                    facts.injects.push(InjectFact {
+                        owner: owner.to_string(),
+                        injected_type: type_name,
+                        how: if autowired { InjectKind::Autowired } else { InjectKind::FinalField },
+                    });
+                }
+            }
+            "constructor_declaration" => {
+                if !inject_rules.iter().any(|r| r.constructor_params) {
+                    continue;
+                }
+                let Some(params) = member.child_by_field_name("parameters") else { continue };
+                let mut pc = params.walk();
+                for p in params.children(&mut pc) {
+                    if p.kind() != "formal_parameter" {
+                        continue;
+                    }
+                    if let Some(ty) = p.child_by_field_name("type") {
+                        facts.injects.push(InjectFact {
+                            owner: owner.to_string(),
+                            injected_type: text(ty, src).to_string(),
+                            how: InjectKind::Constructor,
+                        });
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+// ─────────────────────────── TypeScript / React ───────────────────────────
+
+/// `fetch("/api/x")`, `axios.get("/api/x")`, `api.post("/api/x", body)` 를 잡는다.
+/// 이것이 `CALLS_API` 엣지의 프런트 쪽 끝이다.
+pub fn extract_api_calls(
+    root: Node,
+    src: &[u8],
+    lang: &str,
+    rules: &FrameworkRules,
+) -> Vec<ApiCallFact> {
+    let clients = rules.http_clients(lang);
+    let mut out = Vec::new();
+    if clients.is_empty() {
+        return out;
+    }
+    walk_ts(root, src, &clients, &mut out);
+    out
+}
+
+fn walk_ts(
+    node: Node,
+    src: &[u8],
+    clients: &[&crate::rules::HttpClientRule],
+    out: &mut Vec<ApiCallFact>,
+) {
+    if node.kind() == "call_expression" {
+        if let Some(fact) = api_call_of(node, src, clients) {
+            out.push(fact);
+        }
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        walk_ts(child, src, clients, out);
+    }
+}
+
+fn api_call_of(
+    call: Node,
+    src: &[u8],
+    clients: &[&crate::rules::HttpClientRule],
+) -> Option<ApiCallFact> {
+    let func = call.child_by_field_name("function")?;
+
+    // 어떤 규칙에 걸리는지 찾는다. 사내 래퍼도 설정에 추가하면 그대로 잡힌다.
+    let (method, url_arg) = clients.iter().find_map(|rule| -> Option<(String, usize)> { match func.kind() {
+        "identifier" => {
+            let name = text(func, src);
+            (rule.callee.as_deref() == Some(name))
+                .then(|| (rule.method.clone().unwrap_or_else(|| "GET".into()), rule.url_arg))
+        }
+        "member_expression" => {
+            let prop = func.child_by_field_name("property")?;
+            let verb = text(prop, src).to_ascii_lowercase();
+            // `this.post(...)`, `app.get(...)` 은 라우트 정의다.
+            let receiver = func.child_by_field_name("object").map(|o| text(o, src));
+            if let Some(recv) = receiver {
+                if rule
+                    .exclude_receivers
+                    .iter()
+                    .any(|x| x.eq_ignore_ascii_case(recv))
+                {
+                    return None;
+                }
+            }
+            rule.receiver_methods
+                .iter()
+                .any(|m| m.eq_ignore_ascii_case(&verb))
+                .then(|| {
+                    // method 미지정이면 호출된 메서드 이름이 곧 HTTP 메서드다.
+                    let m = rule.method.clone().unwrap_or_else(|| verb.to_uppercase());
+                    (m, rule.url_arg)
+                })
+        }
+        _ => None,
+    }})?;
+
+    let args = call.child_by_field_name("arguments")?;
+
+    // 인자에 함수/화살표가 있으면 **핸들러 등록**이다 — 클라이언트 호출이 아니다.
+    // Express `app.get(path, handler)`, miragejs `this.post(path, handler)` 등을
+    // 프레임워크 무관하게 걸러낸다.
+    if has_function_argument(args) {
+        return None;
+    }
+
+    let raw = url_argument_at(args, src, url_arg)?;
+    // 도메인 경로처럼 보이지 않으면 버린다. `useState("")` 같은 오탐 방지.
+    if !raw.starts_with('/') && !raw.contains("/api") {
+        return None;
+    }
+
+    let dynamic = has_dynamic_segment(&raw);
+    Some(ApiCallFact {
+        method,
+        path: normalize_route_path(&raw),
+        raw_path: raw,
+        span: span_of(call),
+        dynamic,
+    })
+}
+
+fn has_function_argument(args: Node) -> bool {
+    let mut cursor = args.walk();
+    let found = args.children(&mut cursor).any(|a| {
+        matches!(
+            a.kind(),
+            "arrow_function" | "function_expression" | "function" | "function_declaration"
+        )
+    });
+    found
+}
+
+/// `index`번째 실인자가 문자열/템플릿 리터럴이면 원문을 돌려준다.
+fn url_argument_at(args: Node, src: &[u8], index: usize) -> Option<String> {
+    let mut cursor = args.walk();
+    let mut position = 0usize;
+    for arg in args.children(&mut cursor) {
+        if matches!(arg.kind(), "(" | ")" | ",") {
+            continue;
+        }
+        if position == index {
+            return match arg.kind() {
+                "string" | "template_string" => {
+                    Some(text(arg, src).trim_matches(['"', '\'', '`']).to_string())
+                }
+                // 변수로 만든 URL은 정적으로 알 수 없다.
+                _ => None,
+            };
+        }
+        position += 1;
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tree_sitter::Parser;
+
+    fn java_tree(src: &str) -> (tree_sitter::Tree, Vec<u8>) {
+        let mut p = Parser::new();
+        p.set_language(&tree_sitter_java::LANGUAGE.into()).unwrap();
+        (p.parse(src, None).unwrap(), src.as_bytes().to_vec())
+    }
+
+    fn ts_tree(src: &str) -> (tree_sitter::Tree, Vec<u8>) {
+        let mut p = Parser::new();
+        p.set_language(&tree_sitter_typescript::LANGUAGE_TSX.into()).unwrap();
+        (p.parse(src, None).unwrap(), src.as_bytes().to_vec())
+    }
+
+    #[test]
+    fn normalizes_all_three_param_syntaxes() {
+        // 프런트–백엔드 매칭이 문자열 비교로 끝나야 한다.
+        assert_eq!(normalize_route_path("/api/orders/{id}"), "/api/orders/{}");
+        assert_eq!(normalize_route_path("/api/orders/:id"), "/api/orders/{}");
+        assert_eq!(normalize_route_path("`/api/orders/${id}`"), "/api/orders/{}");
+        assert_eq!(normalize_route_path("/api/orders/"), "/api/orders");
+        assert_eq!(normalize_route_path("articles"), "/articles");
+        assert_eq!(
+            normalize_route_path("/api/users/{userId}/posts/{postId}"),
+            "/api/users/{}/posts/{}"
+        );
+    }
+
+    #[test]
+    fn extracts_spring_routes_with_class_base_path() {
+        let src = r#"
+@RestController
+@RequestMapping("/api/articles")
+public class ArticleController {
+    @GetMapping("/{slug}")
+    public ArticleDto get(String slug) { return null; }
+
+    @PostMapping
+    public ArticleDto create(ArticleReq req) { return null; }
+
+    @DeleteMapping("/{slug}/favorite")
+    public void unfavorite(String slug) {}
+}
+"#;
+        let (tree, bytes) = java_tree(src);
+        let rules = FrameworkRules::effective(&FrameworkRules::default());
+        let f = extract_annotated(tree.root_node(), &bytes, "java", &rules);
+
+        let routes: Vec<(String, String, String)> = f
+            .routes
+            .iter()
+            .map(|r| (r.method.clone(), r.path.clone(), r.handler.clone()))
+            .collect();
+
+        assert!(routes.contains(&("GET".into(), "/api/articles/{}".into(), "get".into())), "{routes:?}");
+        assert!(routes.contains(&("POST".into(), "/api/articles".into(), "create".into())), "{routes:?}");
+        assert!(
+            routes.contains(&("DELETE".into(), "/api/articles/{}/favorite".into(), "unfavorite".into())),
+            "{routes:?}"
+        );
+    }
+
+    #[test]
+    fn detects_bean_and_injections() {
+        let src = r#"
+@Service
+@RequiredArgsConstructor
+public class ArticleService {
+    private final ArticleRepository articleRepository;
+    @Autowired private TagService tagService;
+
+    public ArticleService(UserRepository userRepository) {}
+}
+"#;
+        let (tree, bytes) = java_tree(src);
+        let rules = FrameworkRules::effective(&FrameworkRules::default());
+        let f = extract_annotated(tree.root_node(), &bytes, "java", &rules);
+
+        assert_eq!(f.beans.len(), 1);
+        assert_eq!(f.beans[0].stereotype, "Service");
+
+        let injected: Vec<&str> = f.injects.iter().map(|i| i.injected_type.as_str()).collect();
+        // Lombok final 필드 · @Autowired 필드 · 생성자 파라미터 세 형태를 모두 잡아야 한다.
+        assert!(injected.contains(&"ArticleRepository"), "{injected:?}");
+        assert!(injected.contains(&"TagService"), "{injected:?}");
+        assert!(injected.contains(&"UserRepository"), "{injected:?}");
+    }
+
+    #[test]
+    fn request_mapping_method_argument_wins() {
+        let src = r#"
+@RestController
+public class C {
+    @RequestMapping(value = "/login", method = RequestMethod.POST)
+    public void login() {}
+}
+"#;
+        let (tree, bytes) = java_tree(src);
+        let rules = FrameworkRules::effective(&FrameworkRules::default());
+        let f = extract_annotated(tree.root_node(), &bytes, "java", &rules);
+        assert_eq!(f.routes.len(), 1);
+        assert_eq!(f.routes[0].method, "POST");
+        assert_eq!(f.routes[0].path, "/login");
+    }
+
+    #[test]
+    fn route_definitions_are_not_client_calls() {
+        // miragejs / Express 스타일 라우트 등록은 클라이언트 호출이 아니다.
+        let src = r#"
+function makeServer() {
+  this.post('/users/login', (schema, request) => { return 1; });
+  app.get('/articles', handler);
+  axios.get('/api/real');
+}
+"#;
+        let (tree, bytes) = ts_tree(src);
+        let rules = FrameworkRules::effective(&FrameworkRules::default());
+        let calls = extract_api_calls(tree.root_node(), &bytes, "typescript", &rules);
+        let paths: Vec<&str> = calls.iter().map(|c| c.path.as_str()).collect();
+        assert_eq!(paths, vec!["/api/real"], "오탐: {paths:?}");
+    }
+
+    #[test]
+    fn detects_dynamically_built_paths() {
+        assert!(!has_dynamic_segment("/api/orders/${id}"));
+        assert!(!has_dynamic_segment("/api/orders/${id}/items"));
+        // 세그먼트 중간 치환 — 정적으로 결정 불가
+        assert!(has_dynamic_segment("/users${isRegister ? '' : '/login'}"));
+        assert!(has_dynamic_segment("/api/v${version}/orders"));
+    }
+
+    #[test]
+    fn extracts_react_api_calls() {
+        let src = r#"
+export function useArticle(slug) {
+  const a = fetch(`/api/articles/${slug}`);
+  const b = axios.get('/api/tags');
+  const c = api.post("/api/articles", body);
+  const d = useState("");
+  const e = items.map(x => x);
+  return [a, b, c, d, e];
+}
+"#;
+        let (tree, bytes) = ts_tree(src);
+        let rules = FrameworkRules::effective(&FrameworkRules::default());
+        let calls = extract_api_calls(tree.root_node(), &bytes, "typescript", &rules);
+        let pairs: Vec<(String, String)> =
+            calls.iter().map(|c| (c.method.clone(), c.path.clone())).collect();
+
+        assert!(pairs.contains(&("GET".into(), "/api/articles/{}".into())), "{pairs:?}");
+        assert!(pairs.contains(&("GET".into(), "/api/tags".into())), "{pairs:?}");
+        assert!(pairs.contains(&("POST".into(), "/api/articles".into())), "{pairs:?}");
+        // useState("")·map()은 HTTP 호출이 아니다.
+        assert_eq!(pairs.len(), 3, "오탐: {pairs:?}");
+    }
+}

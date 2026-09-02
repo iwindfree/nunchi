@@ -5,6 +5,7 @@
 
 use crate::config::Config;
 use crate::extract::{self, SupportedLang};
+use crate::framework::{self, FrameworkFacts};
 use crate::lang;
 use crate::model::*;
 use crate::path as npath;
@@ -12,7 +13,7 @@ use crate::resolve::{ResolveStats, SymbolTable, UnresolvedTally};
 use crate::store::{sqlite::SqliteStore, Store};
 use anyhow::{Context, Result};
 use globset::{Glob, GlobSet, GlobSetBuilder};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::process::Command;
 
@@ -33,6 +34,17 @@ pub struct IndexStats {
     pub by_lang: BTreeMap<String, (usize, usize)>,
     /// 미해소 호출 이름 상위 — 외부 API인지 추출기 결함인지 판단하는 근거
     pub top_unresolved: Vec<(String, usize)>,
+    // ── 프레임워크 의미론 (Phase 1c) ──
+    pub routes: usize,
+    pub beans: usize,
+    pub injects_resolved: usize,
+    pub injects_unresolved: usize,
+    pub api_calls: usize,
+    /// 프런트 호출이 백엔드 라우트에 연결된 수 — v1의 하이라이트 지표
+    pub api_calls_linked: usize,
+    pub unlinked_api_paths: Vec<String>,
+    /// 정적으로 경로를 알 수 없는 호출 — 연결 실패로 세면 지표가 왜곡된다
+    pub api_calls_dynamic: usize,
 }
 
 pub fn build_exclude_set(patterns: &[String]) -> Result<GlobSet> {
@@ -52,10 +64,14 @@ struct PendingFile {
     facts: extract::FileFacts,
     /// 심볼 span — 호출의 소속 심볼을 찾는 데 쓴다
     symbol_spans: Vec<(Span, NodeId)>,
+    fw: FrameworkFacts,
+    /// 이 파일에서 만든 ApiCall 노드들 — 2패스에서 라우트에 연결한다
+    api_call_ids: Vec<(NodeId, String, String, bool)>,
 }
 
 pub fn index_all(config: &Config, store: &mut SqliteStore) -> Result<IndexStats> {
     let excludes = build_exclude_set(&config.index.exclude)?;
+    let rules = crate::rules::FrameworkRules::effective(&config.framework);
     let mut stats = IndexStats::default();
     let mut table = SymbolTable::default();
     let mut tally = UnresolvedTally::default();
@@ -70,7 +86,7 @@ pub fn index_all(config: &Config, store: &mut SqliteStore) -> Result<IndexStats>
             .with_context(|| format!("저장소 경로를 찾을 수 없습니다: {}", root.display()))?;
         let repo = repo_name(&root);
         scan_repo(
-            &repo, &root, config, &excludes, store, &mut stats, &mut table, &mut pending,
+            &repo, &root, config, &excludes, &rules, store, &mut stats, &mut table, &mut pending,
             &mut nodes, &mut edges,
         )?;
         stats.repos += 1;
@@ -124,11 +140,153 @@ pub fn index_all(config: &Config, store: &mut SqliteStore) -> Result<IndexStats>
         }
     }
 
+    // ── 교차 저장소 계약 엣지 — v1의 하이라이트 (PLAN.md 3.9절) ──
+    // 라우트는 솔루션 전체에서 유일하므로 저장소가 달라도 매칭된다.
+    let mut route_index: HashMap<(String, String), NodeId> = HashMap::new();
+    for file in &pending {
+        for r in &file.fw.routes {
+            route_index.insert(
+                (r.method.clone(), r.path.clone()),
+                route_id(&r.method, &r.path),
+            );
+        }
+    }
+
+    for file in &pending {
+        for (call_id, method, path, dynamic) in &file.api_call_ids {
+            if *dynamic {
+                continue; // 경로를 정적으로 알 수 없다 — 연결 실패가 아니다
+            }
+            // 정확히 일치하는 라우트 우선, 없으면 메서드 무관(@RequestMapping) 라우트.
+            let hit = route_index
+                .get(&(method.clone(), path.clone()))
+                .map(|id| (id.clone(), 0.9))
+                .or_else(|| {
+                    route_index
+                        .get(&("ANY".to_string(), path.clone()))
+                        .map(|id| (id.clone(), 0.6))
+                });
+            match hit {
+                Some((route, confidence)) => {
+                    stats.api_calls_linked += 1;
+                    edges.push(
+                        Edge::new(call_id.clone(), route, EdgeKind::CallsApi, Provenance::Fast)
+                            .with_confidence(confidence),
+                    );
+                }
+                None => {
+                    if stats.unlinked_api_paths.len() < 8 {
+                        stats.unlinked_api_paths.push(format!("{method} {path}"));
+                    }
+                }
+            }
+        }
+
+        // DI 주입 — 타입 이름을 심볼로 해소한다.
+        for inject in &file.fw.injects {
+            let owner = NodeId::symbol(&file.repo, &file.rel, &inject.owner);
+            let candidates = table.candidates(&inject.injected_type);
+            if candidates.is_empty() {
+                stats.injects_unresolved += 1;
+                continue;
+            }
+            stats.injects_resolved += 1;
+            let confidence = 0.9 / candidates.len() as f32;
+            for dst in candidates {
+                edges.push(
+                    Edge::new(owner.clone(), dst.clone(), EdgeKind::Injects, Provenance::Fast)
+                        .with_confidence(confidence),
+                );
+            }
+        }
+    }
+
     stats.top_unresolved = tally.top(8);
     stats.nodes = store.upsert_nodes(&nodes)?;
     stats.edges = store.upsert_edges(&edges)?;
     persist_metrics(store, &stats)?;
     Ok(stats)
+}
+
+/// 라우트 노드 ID. 솔루션 전역에서 유일해야 프런트–백엔드가 같은 노드를 가리킨다.
+fn route_id(method: &str, path: &str) -> NodeId {
+    NodeId(format!("route:{method} {path}"))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn extract_framework(
+    sl: SupportedLang,
+    language: &str,
+    rules: &crate::rules::FrameworkRules,
+    source: &str,
+    abs: &Path,
+    repo: &str,
+    rel: &str,
+    file_id: &NodeId,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    stats: &mut IndexStats,
+) -> (FrameworkFacts, Vec<(NodeId, String, String, bool)>) {
+    let mut parser = tree_sitter::Parser::new();
+    let Ok(()) = parser.set_language(&sl.language_for(abs)) else {
+        return (FrameworkFacts::default(), Vec::new());
+    };
+    let Some(tree) = parser.parse(source, None) else {
+        return (FrameworkFacts::default(), Vec::new());
+    };
+    let bytes = source.as_bytes();
+    let root = tree.root_node();
+
+    let mut fw = framework::extract_annotated(root, bytes, language, rules);
+    fw.api_calls = framework::extract_api_calls(root, bytes, language, rules);
+
+    for route in &fw.routes {
+        let id = route_id(&route.method, &route.path);
+        let mut node = Node::new(
+            id,
+            NodeKind::Route,
+            format!("{} {}", route.method, route.path),
+            repo,
+        );
+        node.path = Some(rel.to_string());
+        node.span = Some(route.span);
+        node.signature = Some(format!("{} {}", route.method, route.raw_path));
+        node.lang = Some(language.to_string());
+        nodes.push(node);
+        stats.routes += 1;
+    }
+    stats.beans += fw.beans.len();
+
+    let mut api_call_ids = Vec::new();
+    for (i, call) in fw.api_calls.iter().enumerate() {
+        let id = NodeId(format!("api:{repo}/{rel}#{}:{i}", call.span.start_line));
+        let mut node = Node::new(
+            id.clone(),
+            NodeKind::ApiCall,
+            format!("{} {}", call.method, call.path),
+            repo,
+        );
+        node.path = Some(rel.to_string());
+        node.span = Some(call.span);
+        node.signature = Some(format!("{} {}", call.method, call.raw_path));
+        node.lang = Some(language.to_string());
+        node.attrs = serde_json::json!({ "dynamic": call.dynamic });
+        nodes.push(node);
+        edges.push(Edge::new(
+            file_id.clone(),
+            id.clone(),
+            EdgeKind::Contains,
+            Provenance::Fast,
+        ));
+        api_call_ids.push((id, call.method.clone(), call.path.clone(), call.dynamic));
+        if call.dynamic {
+            stats.api_calls_dynamic += 1;
+        } else {
+            stats.api_calls += 1;
+        }
+    }
+
+    (fw, api_call_ids)
 }
 
 /// 호출이 속한 심볼 — span이 그 줄을 포함하는 것 중 **가장 좁은** 것.
@@ -170,6 +328,7 @@ fn scan_repo(
     root: &Path,
     config: &Config,
     excludes: &GlobSet,
+    rules: &crate::rules::FrameworkRules,
     store: &mut SqliteStore,
     stats: &mut IndexStats,
     table: &mut SymbolTable,
@@ -263,6 +422,19 @@ fn scan_repo(
             counter.1 += 1;
         }
 
+        // ── 프레임워크 의미론 (Phase 1c) ──
+        let (fw, api_call_ids) = extract_framework(
+            sl, language, rules, source, abs, repo, &rel, &file_id, nodes, edges, stats,
+        );
+
+        // Bean 스테레오타입은 별도 노드를 만들지 않고 클래스 심볼의 속성으로 붙인다.
+        // 별도 노드를 만들면 하나의 클래스가 두 개의 정체성을 갖게 된다.
+        let stereotypes: HashMap<&str, &str> = fw
+            .beans
+            .iter()
+            .map(|b| (b.name.as_str(), b.stereotype.as_str()))
+            .collect();
+
         let mut symbol_spans = Vec::new();
         for sym in &facts.symbols {
             let sym_id = NodeId::symbol(repo, &rel, &sym.name);
@@ -272,7 +444,13 @@ fn scan_repo(
             node.signature = sym.signature.clone();
             node.doc = sym.doc.clone();
             node.lang = Some(language.to_string());
-            node.attrs = serde_json::json!({ "symbol_kind": sym.kind });
+            node.attrs = match stereotypes.get(sym.name.as_str()) {
+                Some(stereotype) => serde_json::json!({
+                    "symbol_kind": sym.kind,
+                    "spring_stereotype": stereotype,
+                }),
+                None => serde_json::json!({ "symbol_kind": sym.kind }),
+            };
             nodes.push(node);
 
             edges.push(Edge::new(
@@ -292,6 +470,18 @@ fn scan_repo(
             stats.symbols += 1;
         }
 
+        for route in &fw.routes {
+            edges.push(
+                Edge::new(
+                    route_id(&route.method, &route.path),
+                    NodeId::symbol(repo, &rel, &route.handler),
+                    EdgeKind::Handles,
+                    Provenance::Fast,
+                )
+                .with_confidence(0.9),
+            );
+        }
+
         pending.push(PendingFile {
             repo: repo.to_string(),
             rel,
@@ -299,6 +489,8 @@ fn scan_repo(
             file_id,
             facts,
             symbol_spans,
+            fw,
+            api_call_ids,
         });
     }
     Ok(())
@@ -316,6 +508,14 @@ fn persist_metrics(store: &mut SqliteStore, stats: &IndexStats) -> Result<()> {
         "top_unresolved": stats.top_unresolved.iter()
             .map(|(name, n)| serde_json::json!({"name": name, "count": n}))
             .collect::<Vec<_>>(),
+        "routes": stats.routes,
+        "beans": stats.beans,
+        "api_calls": stats.api_calls,
+        "api_calls_dynamic": stats.api_calls_dynamic,
+        "api_calls_linked": stats.api_calls_linked,
+        "unlinked_api_paths": stats.unlinked_api_paths,
+        "injects_resolved": stats.injects_resolved,
+        "injects_unresolved": stats.injects_unresolved,
         "imports_internal": stats.imports_internal,
         "imports_external": stats.imports_external,
         "by_lang": stats.by_lang.iter()

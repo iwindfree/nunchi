@@ -13,6 +13,10 @@ pub struct Config {
     pub index: IndexConfig,
     #[serde(default)]
     pub rank: RankWeights,
+    /// 프레임워크 의미론 규칙. 비워두면 내장 기본값(Spring + React)이 쓰인다.
+    /// 여기에 추가하면 재빌드 없이 지원 범위가 넓어진다 — `crate::rules` 참조.
+    #[serde(default)]
+    pub framework: crate::rules::FrameworkRules,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

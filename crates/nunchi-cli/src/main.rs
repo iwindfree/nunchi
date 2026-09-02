@@ -63,6 +63,12 @@ enum Command {
         #[arg(long, default_value_t = 4000)]
         budget: usize,
     },
+    /// 적용 중인 프레임워크 규칙을 출력 — nunchi.toml에 복사해 확장한다
+    Rules {
+        /// TOML로 출력 (그대로 nunchi.toml에 붙여넣을 수 있다)
+        #[arg(long)]
+        toml: bool,
+    },
     /// TUI — 그래프 탐색·팩 미리보기·가중치 튜닝
     Tui,
 }
@@ -85,6 +91,7 @@ fn main() -> Result<()> {
         Command::Find { query, limit, json } => cmd_find(cli.config, &query, limit, json),
         Command::Serve => not_yet("serve", "Phase 1 — rmcp 연동"),
         Command::Pack { .. } => not_yet("pack", "Phase 2 — 랭킹 + 토큰 예산 렌더링"),
+        Command::Rules { toml: as_toml } => cmd_rules(cli.config, as_toml),
         Command::Tui => not_yet("tui", "Phase 3.5 — ratatui"),
     }
 }
@@ -145,6 +152,9 @@ fn cmd_init(repos: Vec<PathBuf>, name: Option<String>, force: bool) -> Result<()
             ..IndexConfig::default()
         },
         rank: RankWeights::default(),
+        // 비워두면 내장 규칙(Spring + React)이 적용된다.
+        // `nunchi rules`로 현재 규칙을 확인하고 nunchi.toml에 추가해 확장한다.
+        framework: Default::default(),
     };
     config.save(&target)?;
 
@@ -156,6 +166,7 @@ fn cmd_init(repos: Vec<PathBuf>, name: Option<String>, force: bool) -> Result<()
     }
     println!("  언어    {}", if detected.is_empty() { "(감지 실패 — 기본값)".into() } else { detected.join(", ") });
     println!("\n제외 패턴을 확인하세요. 생성 코드가 인덱스에 들어오면 랭킹이 오염됩니다.");
+    println!("프레임워크 규칙은 내장 기본값(Spring + React)이 적용됩니다 — `nunchi rules`로 확인.");
     println!("다음: nunchi index");
     Ok(())
 }
@@ -296,12 +307,99 @@ fn cmd_doctor(config_arg: Option<PathBuf>, json: bool) -> Result<()> {
         None => println!("호출 연결률   (미측정 — `nunchi index --rebuild`를 실행하세요)"),
     }
 
+    // ── 프레임워크 의미론 · 교차 저장소 (Phase 1c) ──
+    let get = |k: &str| metrics.get(k).and_then(|v| v.as_u64()).unwrap_or(0);
+    println!("\n프레임워크 의미론");
+    println!("  라우트 {} · Bean {} · 주입 {}해소/{}미해소",
+        get("routes"), get("beans"), get("injects_resolved"), get("injects_unresolved"));
+
+    let api = get("api_calls");
+    let linked = get("api_calls_linked");
+    if api > 0 {
+        let pct = linked as f64 / api as f64 * 100.0;
+        let mark = if pct >= 70.0 { "✓" } else if pct >= 40.0 { "⚠" } else { "✗" };
+        println!("\n교차 저장소 계약 (CALLS_API)  {mark}");
+        println!("  프런트 API 호출 {api} — 백엔드 라우트에 연결 {linked} ({pct:.0}%)");
+        let dynamic = get("api_calls_dynamic");
+        if dynamic > 0 {
+            println!("  동적 경로 {dynamic}건 제외 — 런타임에 조립되어 정적 분석 불가");
+        }
+        if let Some(unlinked) = metrics.get("unlinked_api_paths").and_then(|v| v.as_array()) {
+            if !unlinked.is_empty() {
+                println!("  미연결 경로 — 백엔드에 없거나 경로 표기가 어긋난 것들:");
+                for u in unlinked {
+                    println!("    {}", u.as_str().unwrap_or("?"));
+                }
+            }
+        }
+    } else {
+        println!("\n교차 저장소 계약  프런트 API 호출이 탐지되지 않았습니다.");
+        println!("  사내 HTTP 래퍼를 쓴다면 nunchi.toml에 규칙을 추가하세요 (`nunchi rules` 참조).");
+    }
+
     println!("\n인덱스     노드 {nodes} · 엣지 {edges}");
 
     let _ = rate;
     println!("\n⚠ 빠른 경로(tree-sitter) 결과입니다. 이름 기반 해소이므로 연결률에는
   외부 라이브러리 호출이 분모로 포함됩니다 — 이 값에 95% 목표를 걸 수 없습니다.
   계획서의 심볼 해소율 95% 목표는 SCIP 정밀 경로(Phase 1b) 지표입니다.");
+    Ok(())
+}
+
+fn cmd_rules(config_arg: Option<PathBuf>, as_toml: bool) -> Result<()> {
+    // 설정이 없어도 내장 규칙을 볼 수 있어야 한다.
+    let user = resolve(config_arg)
+        .map(|(c, _)| c.framework)
+        .unwrap_or_default();
+    let effective = nunchi_core::rules::FrameworkRules::effective(&user);
+
+    if as_toml {
+        println!("{}", toml::to_string_pretty(&effective)?);
+        return Ok(());
+    }
+
+    println!("적용 중인 프레임워크 규칙\n");
+    println!("라우트 어노테이션");
+    for r in &effective.route {
+        let via = r.method_from_args_prefix.as_deref()
+            .map(|p| format!("  (인자의 {p}* 가 우선)"))
+            .unwrap_or_default();
+        println!("  {:<8} @{:<22} → {}{via}", r.lang, r.annotation, r.method);
+    }
+    println!("\n경로 접두 어노테이션");
+    for r in &effective.base_path {
+        println!("  {:<8} @{}", r.lang, r.annotation);
+    }
+    println!("\nBean 스테레오타입");
+    for r in &effective.bean {
+        println!("  {:<8} {}", r.lang, r.annotations.join(", "));
+    }
+    println!("\n주입 판별");
+    for r in &effective.inject {
+        println!("  {:<8} @{} · final필드={} · 생성자파라미터={}",
+            r.lang, r.annotations.join(" @"), r.final_fields, r.constructor_params);
+    }
+    println!("\nHTTP 클라이언트 호출");
+    for r in &effective.http_client {
+        let what = match (&r.callee, r.receiver_methods.is_empty()) {
+            (Some(c), _) => format!("{c}(…)"),
+            (None, false) => format!("_.{}(…)", r.receiver_methods.join("|")),
+            _ => "?".into(),
+        };
+        let m = r.method.clone().unwrap_or_else(|| "(메서드명에서)".into());
+        println!("  {:<8} {:<44} → {m}  url=인자{}", r.lang, what, r.url_arg);
+    }
+    println!("\n확장하려면 nunchi.toml에 추가하세요. 재빌드가 필요 없습니다:");
+    println!(r#"
+[[framework.http_client]]          # 사내 래퍼 지원 예시
+lang = "typescript"
+receiver_methods = ["fetchJson"]
+
+[[framework.route]]                # 사내 어노테이션 예시
+lang = "java"
+annotation = "InternalEndpoint"
+method = "POST"
+"#);
     Ok(())
 }
 
