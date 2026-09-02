@@ -1,0 +1,9 @@
+/target
+*.db
+*.db-wal
+*.db-shm
+.nunchi/
+
+# 머신별 절대 경로를 담으므로 커밋하지 않는다 (PLAN.md 3.10절)
+# TODO: 경로(머신별) / 제외패턴·랭킹가중치(저장소 공용) 분리 후 후자는 커밋한다
+nunchi.toml
