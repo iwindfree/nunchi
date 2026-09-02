@@ -229,9 +229,10 @@ annotations = ["OurService", "OurComponent"]
 
 ```toml
 [semantic.terms]
-주문 = ["order", "orders"]
-결제 = ["payment", "billing", "charge"]
-회원 = ["user", "member", "account"]
+# TOML은 비ASCII 키를 따옴표 없이 쓸 수 없습니다. 반드시 감싸세요.
+"주문" = ["order", "orders"]
+"결제" = ["payment", "billing", "charge"]
+"회원" = ["user", "member", "account"]
 ```
 
 현재 규칙을 보려면 `nunchi rules`, 그대로 복사하려면 `nunchi rules --toml`.

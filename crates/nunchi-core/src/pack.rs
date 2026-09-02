@@ -89,6 +89,9 @@ pub struct Pack {
     /// 인덱스가 낡아 신뢰할 수 없는 항목. 틀린 좌표를 자신 있게 주는 것보다
     /// 낡았다고 말하는 편이 항상 낫다 (PLAN.md 3.6절).
     pub stale: Vec<String>,
+    /// 결과가 비었을 때의 원인 안내. 빈 팩을 말없이 돌려주면 안 된다.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
 }
 
 /// 노드 종류별 사전확률.
@@ -163,6 +166,26 @@ pub fn build_pack(
         seeds.push(h.node.name.clone());
     }
     if hits.is_empty() {
+        // 인덱스는 대체로 영어 식별자다. 한국어(또는 도메인 용어)로 물으면
+        // 동의어 사전 없이는 아무것도 매칭되지 않는다 — 그 사실을 말해준다.
+        let non_ascii = task.chars().any(|c| !c.is_ascii());
+        let hint = if non_ascii && opts.synonyms.terms.is_empty() {
+            // TOML은 비ASCII 키를 따옴표 없이 쓸 수 없다. 예시에 반드시 따옴표를 넣는다.
+            [
+                format!("\"{task}\" 에 매칭되는 심볼이 없습니다."),
+                "인덱스는 영어 식별자로 되어 있어 도메인 용어 사전이 필요합니다.".into(),
+                "nunchi.toml에 추가하세요 (한글 키는 반드시 따옴표로 감쌉니다):".into(),
+                "".into(),
+                "  [semantic.terms]".into(),
+                "  \"댓글\" = [\"comment\"]".into(),
+                "  \"삭제\" = [\"delete\", \"remove\"]".into(),
+                "".into(),
+                format!("또는 영어 식별자를 함께 넣어 질의하세요: \"{task} delete comment\""),
+            ]
+            .join("\n")
+        } else {
+            format!("\"{task}\" 에 매칭되는 항목이 없습니다. `nunchi find`로 확인해 보세요.")
+        };
         return Ok(Pack {
             budget: opts.budget,
             used: 0,
@@ -170,6 +193,7 @@ pub fn build_pack(
             items: Vec::new(),
             related: Related::default(),
             stale: Vec::new(),
+            hint: Some(hint),
         });
     }
 
@@ -293,6 +317,7 @@ pub fn build_pack(
         items,
         related,
         stale,
+        hint: None,
     })
 }
 
@@ -480,6 +505,11 @@ pub fn repo_roots(config: &crate::Config) -> HashMap<String, std::path::PathBuf>
 /// 사람이 읽는 형태로 렌더링. TUI 팩 미리보기와 CLI가 공유한다.
 pub fn render_text(pack: &Pack) -> String {
     let mut out = String::new();
+    if let Some(hint) = &pack.hint {
+        out.push_str(hint);
+        out.push_str("\n");
+        return out;
+    }
     out.push_str(&format!(
         "budget {} · used {} ({}%)\nseeds: {}\n\n",
         pack.budget,
