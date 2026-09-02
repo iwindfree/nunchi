@@ -6,10 +6,12 @@
 //! 설계 문서는 저장소 루트의 `PLAN.md`를 참조한다.
 
 pub mod config;
+pub mod extract;
 pub mod index;
 pub mod lang;
 pub mod model;
 pub mod path;
+pub mod resolve;
 pub mod store;
 
 pub use config::Config;

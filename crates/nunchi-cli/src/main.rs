@@ -233,35 +233,75 @@ fn cmd_doctor(config_arg: Option<PathBuf>, json: bool) -> Result<()> {
         anyhow::bail!("인덱스가 없습니다. `nunchi index`를 먼저 실행하세요.");
     }
     let store = SqliteStore::open(&db_path)?;
-    let by_lang = store.files_by_lang()?;
     let nodes = store.count_nodes()?;
     let edges = store.count_edges()?;
+    let metrics: serde_json::Value = store
+        .get_meta("metrics")?
+        .and_then(|m| serde_json::from_str(&m).ok())
+        .unwrap_or(serde_json::Value::Null);
 
     if json {
         let report = serde_json::json!({
             "solution": config.solution.name,
             "nodes": nodes,
             "edges": edges,
-            "files_by_lang": by_lang.iter()
-                .map(|(l, n)| serde_json::json!({"lang": l, "files": n}))
-                .collect::<Vec<_>>(),
-            // 심볼 추출이 들어오면 채워진다 (Phase 1 다음 단계).
-            "symbol_resolution_rate": serde_json::Value::Null,
+            "metrics": metrics,
         });
         println!("{}", serde_json::to_string_pretty(&report)?);
         return Ok(());
     }
 
     println!("solution: {}\n", config.solution.name);
+
     println!("언어 커버리지");
-    for (l, n) in &by_lang {
-        let marker = if lang::is_code(l) { "  " } else { "· " };
-        println!("  {marker}{l:<14}{n:>7} files");
+    if let Some(langs) = metrics.get("by_lang").and_then(|v| v.as_array()) {
+        for entry in langs {
+            let lang_name = entry["lang"].as_str().unwrap_or("?");
+            let files = entry["files"].as_u64().unwrap_or(0);
+            let parsed = entry["parsed"].as_u64().unwrap_or(0);
+            if lang::is_code(lang_name) {
+                let pct = if files > 0 { parsed as f64 / files as f64 * 100.0 } else { 0.0 };
+                let mark = if pct >= 99.0 { "✓" } else if pct >= 90.0 { "⚠" } else { "✗" };
+                println!("  {lang_name:<14}{files:>6} files {parsed:>6} 파싱  {pct:>5.1}%  {mark}");
+            } else {
+                println!("· {lang_name:<14}{files:>6} files       — 파서 없음");
+            }
+        }
     }
+
+    println!();
+    let rate = metrics.get("call_link_rate").and_then(|v| v.as_f64());
+    match rate {
+        Some(r) => {
+            let get = |k: &str| metrics.get(k).and_then(|v| v.as_u64()).unwrap_or(0);
+            println!("호출 연결률                    {:>5.1}%", r * 100.0);
+            println!("  호출 {} — 해소 {} · 모호 {} · 미해소 {} · 후보과다 {}",
+                get("calls_total"), get("calls_resolved"), get("calls_ambiguous"),
+                get("calls_unresolved"), get("calls_dropped"));
+            println!("  import — 내부 {} · 외부 {}", get("imports_internal"), get("imports_external"));
+
+            // 연결률 숫자만으로는 판단할 수 없다. 미해소 이름이 외부 API면 정상이고,
+            // 내부에 있어야 할 이름이면 추출기 결함이다. 사람이 눈으로 가른다.
+            if let Some(top) = metrics.get("top_unresolved").and_then(|v| v.as_array()) {
+                if !top.is_empty() {
+                    println!("\n  미해소 호출 상위 — 외부 API면 정상, 내부 심볼이면 추출기 결함");
+                    for e in top {
+                        println!("    {:<28}{:>6}",
+                            e["name"].as_str().unwrap_or("?"),
+                            e["count"].as_u64().unwrap_or(0));
+                    }
+                }
+            }
+        }
+        None => println!("호출 연결률   (미측정 — `nunchi index --rebuild`를 실행하세요)"),
+    }
+
     println!("\n인덱스     노드 {nodes} · 엣지 {edges}");
-    println!("\n심볼 해소율   (미측정 — 심볼 추출기 구현 후 산출)");
-    println!("스모크 테스트 (미구현)");
-    println!("\n⚠ 현재는 File 노드까지만 인덱싱합니다. tree-sitter 심볼 추출이 다음 단계입니다.");
+
+    let _ = rate;
+    println!("\n⚠ 빠른 경로(tree-sitter) 결과입니다. 이름 기반 해소이므로 연결률에는
+  외부 라이브러리 호출이 분모로 포함됩니다 — 이 값에 95% 목표를 걸 수 없습니다.
+  계획서의 심볼 해소율 95% 목표는 SCIP 정밀 경로(Phase 1b) 지표입니다.");
     Ok(())
 }
 
