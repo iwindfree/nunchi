@@ -5,7 +5,7 @@ members = ["crates/nunchi-core", "crates/nunchi-cli"]
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.90"
 license = "MIT"
 
 [workspace.dependencies]

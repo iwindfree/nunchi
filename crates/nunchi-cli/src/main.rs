@@ -1,5 +1,7 @@
 //! nunchi CLI — 단일 바이너리, 서브커맨드 (PLAN.md 용어 절)
 
+mod serve;
+
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use nunchi_core::config::{Config, IndexConfig, RankWeights, Solution, CONFIG_FILE};
@@ -76,7 +78,10 @@ enum Command {
 }
 
 fn main() -> Result<()> {
+    // stdio MCP 서버는 stdout이 JSON-RPC 전용 채널이다.
+    // 로그를 stdout에 쓰면 프로토콜이 깨진다 — 반드시 stderr로 보낸다.
     tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_env("NUNCHI_LOG")
                 .unwrap_or_else(|_| "info".into()),
@@ -91,7 +96,13 @@ fn main() -> Result<()> {
         Command::Index { rebuild } => cmd_index(cli.config, rebuild),
         Command::Doctor { json } => cmd_doctor(cli.config, json),
         Command::Find { query, limit, json } => cmd_find(cli.config, &query, limit, json),
-        Command::Serve => not_yet("serve", "Phase 1 — rmcp 연동"),
+        Command::Serve => {
+            let (config, db_path) = resolve(cli.config)?;
+            if !db_path.exists() {
+                anyhow::bail!("인덱스가 없습니다. `nunchi index`를 먼저 실행하세요.");
+            }
+            serve::run(config, db_path)
+        }
         Command::Pack { task, budget, json } => cmd_pack(cli.config, &task, budget, json),
         Command::Rules { toml: as_toml } => cmd_rules(cli.config, as_toml),
         Command::Tui => not_yet("tui", "Phase 3.5 — ratatui"),
