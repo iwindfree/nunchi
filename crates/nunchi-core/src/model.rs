@@ -178,6 +178,10 @@ impl Edge {
         self.confidence = c;
         self
     }
+    pub fn with_weight(mut self, w: f32) -> Self {
+        self.weight = w;
+        self
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -12,7 +12,7 @@ use tree_sitter::{Language, Node, Parser, Query, QueryCursor};
 
 /// 파일 하나에서 뽑아낸 사실. 브랜치가 아니라 **내용의 함수**이므로
 /// 콘텐츠 주소 캐시(PLAN.md 3.7절)의 캐시 대상이 된다.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub struct FileFacts {
     pub symbols: Vec<SymbolFact>,
     pub imports: Vec<String>,
@@ -21,7 +21,7 @@ pub struct FileFacts {
     pub had_parse_error: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SymbolFact {
     pub name: String,
     /// `function`, `class`, `method` 등 — 쿼리의 `@def.<kind>` 캡처에서 온다
@@ -31,7 +31,7 @@ pub struct SymbolFact {
     pub doc: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CallFact {
     pub callee: String,
     pub line: u32,

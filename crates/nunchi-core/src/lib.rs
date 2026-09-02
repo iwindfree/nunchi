@@ -5,10 +5,12 @@
 //!
 //! 설계 문서는 저장소 루트의 `PLAN.md`를 참조한다.
 
+pub mod cache;
 pub mod config;
 pub mod extract;
 pub mod framework;
 pub mod graph;
+pub mod history;
 pub mod index;
 pub mod lang;
 pub mod model;

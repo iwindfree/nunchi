@@ -45,6 +45,13 @@ pub struct IndexStats {
     pub unlinked_api_paths: Vec<String>,
     /// 정적으로 경로를 알 수 없는 호출 — 연결 실패로 세면 지표가 왜곡된다
     pub api_calls_dynamic: usize,
+    // ── git 이력 (Phase 3) ──
+    pub commits: usize,
+    pub authors: usize,
+    pub cochange_pairs: usize,
+    // ── 콘텐츠 주소 캐시 (Phase 5) ──
+    pub cache_hits: usize,
+    pub cache_misses: usize,
 }
 
 pub fn build_exclude_set(patterns: &[String]) -> Result<GlobSet> {
@@ -70,6 +77,15 @@ struct PendingFile {
 }
 
 pub fn index_all(config: &Config, store: &mut SqliteStore) -> Result<IndexStats> {
+    index_all_with_cache(config, store, None)
+}
+
+/// 캐시를 함께 쓰는 인덱싱. 브랜치 전환 시 재파싱을 피한다(PLAN 3.7절).
+pub fn index_all_with_cache(
+    config: &Config,
+    store: &mut SqliteStore,
+    mut cache: Option<&mut crate::cache::ExtractCache>,
+) -> Result<IndexStats> {
     let excludes = build_exclude_set(&config.index.exclude)?;
     let rules = crate::rules::FrameworkRules::effective(&config.framework);
     let mut stats = IndexStats::default();
@@ -87,7 +103,7 @@ pub fn index_all(config: &Config, store: &mut SqliteStore) -> Result<IndexStats>
         let repo = repo_name(&root);
         scan_repo(
             &repo, &root, config, &excludes, &rules, store, &mut stats, &mut table, &mut pending,
-            &mut nodes, &mut edges,
+            &mut nodes, &mut edges, cache.as_deref_mut(),
         )?;
         stats.repos += 1;
     }
@@ -335,9 +351,18 @@ fn scan_repo(
     pending: &mut Vec<PendingFile>,
     nodes: &mut Vec<Node>,
     edges: &mut Vec<Edge>,
+    mut cache: Option<&mut crate::cache::ExtractCache>,
 ) -> Result<()> {
     let (branch, head) = git_head(root);
     store.record_repo(repo, &npath::normalize(root), branch.as_deref(), head.as_deref())?;
+
+    // git 이력은 브랜치 무관·커밋 시점 갱신이다(PLAN 3.6·3.7절).
+    if config.index.max_commits > 0 {
+        let h = crate::history::index_history(repo, root, config.index.max_commits, nodes, edges)?;
+        stats.commits += h.commits;
+        stats.authors += h.authors;
+        stats.cochange_pairs += h.cochange_pairs;
+    }
 
     let repo_id = NodeId::repo(repo);
     nodes.push(Node::new(repo_id.clone(), NodeKind::Repo, repo, repo));
@@ -411,11 +436,35 @@ fn scan_repo(
 
         // 파서가 없는 언어(yaml/json 등)는 파일 노드까지만.
         let Some(sl) = SupportedLang::from_name(language) else { continue };
-        let facts = match extract::extract(sl, abs, source) {
-            Ok(f) => f,
-            Err(e) => {
-                tracing::warn!("추출 실패 {rel}: {e}");
-                continue;
+        let hash = npath::content_hash(&bytes);
+
+        // 캐시 조회 — 내용이 같으면 브랜치가 달라도 재파싱하지 않는다.
+        let cached = cache
+            .as_deref_mut()
+            .and_then(|c| c.get(&hash, language))
+            .and_then(|p| serde_json::from_str::<extract::FileFacts>(&p).ok());
+
+        let facts = match cached {
+            Some(f) => {
+                stats.cache_hits += 1;
+                f
+            }
+            None => {
+                stats.cache_misses += 1;
+                match extract::extract(sl, abs, source) {
+                    Ok(f) => {
+                        if let (Some(c), Ok(payload)) =
+                            (cache.as_deref_mut(), serde_json::to_string(&f))
+                        {
+                            let _ = c.put(&hash, language, &payload);
+                        }
+                        f
+                    }
+                    Err(e) => {
+                        tracing::warn!("추출 실패 {rel}: {e}");
+                        continue;
+                    }
+                }
             }
         };
         if !facts.had_parse_error {
@@ -516,6 +565,11 @@ fn persist_metrics(store: &mut SqliteStore, stats: &IndexStats) -> Result<()> {
         "unlinked_api_paths": stats.unlinked_api_paths,
         "injects_resolved": stats.injects_resolved,
         "injects_unresolved": stats.injects_unresolved,
+        "cache_hits": stats.cache_hits,
+        "cache_misses": stats.cache_misses,
+        "commits": stats.commits,
+        "authors": stats.authors,
+        "cochange_pairs": stats.cochange_pairs,
         "imports_internal": stats.imports_internal,
         "imports_external": stats.imports_external,
         "by_lang": stats.by_lang.iter()

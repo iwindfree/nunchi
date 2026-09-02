@@ -1,6 +1,7 @@
 //! nunchi CLI — 단일 바이너리, 서브커맨드 (PLAN.md 용어 절)
 
 mod serve;
+mod watch;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -42,6 +43,9 @@ enum Command {
         /// 인덱스를 비우고 처음부터 다시 만든다
         #[arg(long)]
         rebuild: bool,
+        /// 파일 변경을 감시하며 증분 재인덱싱한다 (데몬)
+        #[arg(long)]
+        watch: bool,
     },
     /// 인덱스 품질 검증 — 커버리지, 노드/엣지 수
     Doctor {
@@ -93,7 +97,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Init { repos, name, force } => cmd_init(repos, name, force),
-        Command::Index { rebuild } => cmd_index(cli.config, rebuild),
+        Command::Index { rebuild, watch } => cmd_index(cli.config, rebuild, watch),
         Command::Doctor { json } => cmd_doctor(cli.config, json),
         Command::Find { query, limit, json } => cmd_find(cli.config, &query, limit, json),
         Command::Serve => {
@@ -224,15 +228,18 @@ fn detect_languages(repos: &[PathBuf]) -> Result<Vec<String>> {
         .collect())
 }
 
-fn cmd_index(config_arg: Option<PathBuf>, rebuild: bool) -> Result<()> {
+fn cmd_index(config_arg: Option<PathBuf>, rebuild: bool, watch: bool) -> Result<()> {
     let (config, db_path) = resolve(config_arg)?;
+    // 캐시는 인덱스와 별도 파일이다 — 워크트리마다 인덱스는 달라도 캐시는 공유한다.
+    let cache_path = db_path.with_file_name("extract-cache.db");
     let mut store = SqliteStore::open(&db_path)?;
     if rebuild {
         store.clear()?;
     }
 
     let started = std::time::Instant::now();
-    let stats = index::index_all(&config, &mut store)?;
+    let mut cache = nunchi_core::cache::ExtractCache::open(&cache_path)?;
+    let stats = index::index_all_with_cache(&config, &mut store, Some(&mut cache))?;
     let elapsed = started.elapsed();
 
     println!("인덱싱 완료  {:.2}s", elapsed.as_secs_f64());
@@ -246,7 +253,21 @@ fn cmd_index(config_arg: Option<PathBuf>, rebuild: bool) -> Result<()> {
     }
     println!("  노드     {}", store.count_nodes()?);
     println!("  엣지     {}", store.count_edges()?);
+    println!("  심볼     {}", stats.symbols);
+    if stats.cache_hits + stats.cache_misses > 0 {
+        println!(
+            "  캐시     적중 {}/{} ({:.0}%)",
+            stats.cache_hits,
+            stats.cache_hits + stats.cache_misses,
+            cache.hit_rate() * 100.0
+        );
+    }
     println!("  인덱스   {}", db_path.display());
+
+    if watch {
+        println!();
+        return watch::run(config, db_path, cache_path);
+    }
     println!("\n다음: nunchi doctor");
     Ok(())
 }

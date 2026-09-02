@@ -174,6 +174,10 @@ pub fn build_pack(
     let central = graph.degree_centrality();
     let max_ppr = ppr.iter().cloned().fold(1e-6f32, f32::max);
 
+    // 동시변경 결합도 — 구조적 관계가 없어도 늘 함께 바뀌는 파일을 끌어올린다.
+    // 시드가 속한 파일과 함께 바뀌어온 파일에 점수를 준다.
+    let cochange = cochange_scores(graph, &seed_idx);
+
     // ── 3~4. 후보 수집 + 랭킹 ──
     let w = &opts.weights;
     let mut scored: Vec<(usize, f32, HashMap<&'static str, f32>)> = Vec::new();
@@ -187,14 +191,21 @@ pub fn build_pack(
         let Some(kind) = store.node_kind(id)? else { continue };
         let prior = kind_prior(kind);
         let c = central[i];
-        let score =
-            (w.alpha_bm25 * b + w.beta_ppr * p + w.epsilon_central * c) * prior;
+        let cc = cochange.get(&i).copied().unwrap_or(0.0);
+        let score = (w.alpha_bm25 * b
+            + w.beta_ppr * p
+            + w.epsilon_central * c
+            + w.delta_cochange * cc)
+            * prior;
         let mut why = HashMap::new();
         if b > 0.0 {
             why.insert("bm25", (b * 100.0).round() / 100.0);
         }
         why.insert("ppr", (p * 100.0).round() / 100.0);
         why.insert("prior", prior);
+        if cc > 0.0 {
+            why.insert("cochange", (cc * 100.0).round() / 100.0);
+        }
         scored.push((i, score, why));
     }
     scored.sort_by(|a, b| b.1.total_cmp(&a.1));
@@ -279,6 +290,32 @@ pub fn build_pack(
         related,
         stale,
     })
+}
+
+/// 시드와 함께 바뀌어온 파일의 점수(0~1). 심볼은 소속 파일의 점수를 물려받는다.
+fn cochange_scores(graph: &MemGraph, seeds: &[usize]) -> HashMap<usize, f32> {
+    let mut scores: HashMap<usize, f32> = HashMap::new();
+    let mut max = 1e-6f32;
+    for &s in seeds {
+        // 시드 → (소속 파일) → 동시변경 파일
+        let mut origins = vec![s];
+        origins.extend(graph.neighbors_of_kind(s, EdgeKind::DefinedIn));
+        for o in origins {
+            for n in graph.neighbors_of_kind(o, EdgeKind::CoChangedWith) {
+                let e = scores.entry(n).or_insert(0.0);
+                *e += 1.0;
+                max = max.max(*e);
+                // 그 파일이 담고 있는 심볼에도 절반을 물려준다.
+                for sym in graph.neighbors_of_kind(n, EdgeKind::Contains) {
+                    let e = scores.entry(sym).or_insert(0.0);
+                    *e += 0.5;
+                    max = max.max(*e);
+                }
+            }
+        }
+    }
+    scores.values_mut().for_each(|v| *v /= max);
+    scores
 }
 
 enum Verified {

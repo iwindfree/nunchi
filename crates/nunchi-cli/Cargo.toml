@@ -21,3 +21,4 @@ tracing-subscriber.workspace = true
 ignore = "0.4"
 rmcp = { version = "3", features = ["server", "transport-io"] }
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "io-std"] }
+notify = "8"

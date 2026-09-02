@@ -32,6 +32,13 @@ pub struct IndexConfig {
     /// 생성 코드·벤더 디렉터리가 들어오면 랭킹이 오염된다 (PLAN.md 3.8절).
     pub exclude: Vec<String>,
     pub max_file_bytes: u64,
+    /// git 이력을 몇 커밋까지 읽을지. 0이면 이력 인덱싱을 건너뛴다.
+    #[serde(default = "default_max_commits")]
+    pub max_commits: usize,
+}
+
+fn default_max_commits() -> usize {
+    1000
 }
 
 impl Default for IndexConfig {
@@ -40,6 +47,7 @@ impl Default for IndexConfig {
             languages: vec!["java".into(), "typescript".into(), "rust".into()],
             exclude: DEFAULT_EXCLUDES.iter().map(|s| s.to_string()).collect(),
             max_file_bytes: 2 * 1024 * 1024,
+            max_commits: default_max_commits(),
         }
     }
 }
