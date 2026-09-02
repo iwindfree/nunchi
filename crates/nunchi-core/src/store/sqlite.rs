@@ -164,6 +164,17 @@ impl SqliteStore {
             .flatten())
     }
 
+    /// 종류만 싸게 조회 — 랭킹 루프에서 전체 노드를 로드하지 않기 위해서다.
+    pub fn node_kind(&self, id: &NodeId) -> Result<Option<NodeKind>> {
+        Ok(self
+            .conn
+            .query_row("SELECT kind FROM nodes WHERE id = ?1", params![id.as_str()], |r| {
+                r.get::<_, String>(0)
+            })
+            .optional()?
+            .and_then(|k| NodeKind::parse(&k)))
+    }
+
     pub fn count_nodes(&self) -> Result<i64> {
         Ok(self.conn.query_row("SELECT COUNT(*) FROM nodes", [], |r| r.get(0))?)
     }
@@ -180,6 +191,31 @@ impl SqliteStore {
         )?;
         let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// 메모리 그래프 적재용 — 전체 노드 ID (PLAN.md 2절)
+    pub fn all_node_ids(&self) -> Result<Vec<NodeId>> {
+        let mut stmt = self.conn.prepare("SELECT id FROM nodes")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0).map(NodeId))?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// (src, dst, kind, confidence×weight)
+    pub fn all_edges(&self) -> Result<Vec<(String, String, String, f32)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT src, dst, kind, confidence * weight FROM edges")?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// 파일 노드의 최근 변경 시각(Unix). 랭킹의 recency 항에 쓴다.
+    pub fn set_recency(&mut self, id: &NodeId, epoch: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE nodes SET attrs = json_set(COALESCE(NULLIF(attrs,'null'),'{}'), '$.mtime', ?2) WHERE id = ?1",
+            params![id.as_str(), epoch],
+        )?;
+        Ok(())
     }
 
     pub fn clear(&mut self) -> Result<()> {
@@ -402,7 +438,10 @@ impl Store for SqliteStore {
         let mut stmt = self.conn.prepare(
             "SELECT n.id, n.kind, n.name, n.repo, n.path, n.start_line, n.end_line,
                     n.signature, n.doc, n.lang, n.content_hash, n.attrs,
-                    bm25(nodes_fts) AS score
+                    -- 컬럼 가중치: name > signature > doc > path.
+                    -- 경로에는 디렉터리 이름이 잔뜩 들어 있어 가중치를 주면
+                    -- 파일 노드가 상위를 점령한다(실측에서 확인).
+                    bm25(nodes_fts, 0.0, 10.0, 3.0, 2.0, 0.5) AS score
              FROM nodes_fts
              JOIN nodes n ON n.id = nodes_fts.id
              WHERE nodes_fts MATCH ?1

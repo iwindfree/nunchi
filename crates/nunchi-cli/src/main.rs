@@ -62,6 +62,8 @@ enum Command {
         task: String,
         #[arg(long, default_value_t = 4000)]
         budget: usize,
+        #[arg(long)]
+        json: bool,
     },
     /// 적용 중인 프레임워크 규칙을 출력 — nunchi.toml에 복사해 확장한다
     Rules {
@@ -90,7 +92,7 @@ fn main() -> Result<()> {
         Command::Doctor { json } => cmd_doctor(cli.config, json),
         Command::Find { query, limit, json } => cmd_find(cli.config, &query, limit, json),
         Command::Serve => not_yet("serve", "Phase 1 — rmcp 연동"),
-        Command::Pack { .. } => not_yet("pack", "Phase 2 — 랭킹 + 토큰 예산 렌더링"),
+        Command::Pack { task, budget, json } => cmd_pack(cli.config, &task, budget, json),
         Command::Rules { toml: as_toml } => cmd_rules(cli.config, as_toml),
         Command::Tui => not_yet("tui", "Phase 3.5 — ratatui"),
     }
@@ -343,6 +345,29 @@ fn cmd_doctor(config_arg: Option<PathBuf>, json: bool) -> Result<()> {
     println!("\n⚠ 빠른 경로(tree-sitter) 결과입니다. 이름 기반 해소이므로 연결률에는
   외부 라이브러리 호출이 분모로 포함됩니다 — 이 값에 95% 목표를 걸 수 없습니다.
   계획서의 심볼 해소율 95% 목표는 SCIP 정밀 경로(Phase 1b) 지표입니다.");
+    Ok(())
+}
+
+fn cmd_pack(config_arg: Option<PathBuf>, task: &str, budget: usize, json: bool) -> Result<()> {
+    let (config, db_path) = resolve(config_arg)?;
+    if !db_path.exists() {
+        anyhow::bail!("인덱스가 없습니다. `nunchi index`를 먼저 실행하세요.");
+    }
+    let store = SqliteStore::open(&db_path)?;
+    let graph = nunchi_core::graph::MemGraph::load(&store)?;
+    let roots = nunchi_core::pack::repo_roots(&config);
+    let opts = nunchi_core::pack::PackOptions {
+        budget,
+        weights: config.rank,
+        ..Default::default()
+    };
+    let pack = nunchi_core::pack::build_pack(&store, &graph, task, &roots, &opts)?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&pack)?);
+    } else {
+        print!("{}", nunchi_core::pack::render_text(&pack));
+    }
     Ok(())
 }
 
