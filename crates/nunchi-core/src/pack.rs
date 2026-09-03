@@ -350,9 +350,9 @@ fn cochange_scores(graph: &MemGraph, seeds: &[usize]) -> HashMap<usize, f32> {
 enum Verified {
     /// 파일을 읽었고 해시가 일치한다
     Fresh(String),
-    /// 파일이 없거나 읽을 수 없다 — 본문 없이 좌표만 준다
+    /// 저장소 루트를 모르는 등 검증 자체가 불가 — 본문 없이 좌표만 준다
     Unknown,
-    /// 해시 불일치 — 인덱스가 낡았다
+    /// 해시 불일치이거나 파일이 사라졌다 — 좌표를 신뢰할 수 없다
     Stale,
 }
 
@@ -362,7 +362,8 @@ fn read_verified(node: &Node, roots: &HashMap<String, std::path::PathBuf>) -> Ve
     };
     let abs = npath::to_extended_length(&root.join(rel));
     let Ok(bytes) = std::fs::read(&abs) else {
-        return Verified::Unknown;
+        // 파일이 사라졌는데 인덱스에 남아 있다 — 없는 좌표를 주면 안 된다.
+        return Verified::Stale;
     };
     if let Some(expected) = node.content_hash.as_deref() {
         if npath::content_hash(&bytes) != expected {

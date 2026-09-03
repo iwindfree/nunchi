@@ -52,6 +52,8 @@ pub struct IndexStats {
     // ── 콘텐츠 주소 캐시 (Phase 5) ──
     pub cache_hits: usize,
     pub cache_misses: usize,
+    /// 사라진 파일 때문에 인덱스에서 제거된 노드 수
+    pub pruned: usize,
 }
 
 pub fn build_exclude_set(patterns: &[String]) -> Result<GlobSet> {
@@ -92,6 +94,7 @@ pub fn index_all_with_cache(
     let mut table = SymbolTable::default();
     let mut tally = UnresolvedTally::default();
     let mut pending: Vec<PendingFile> = Vec::new();
+    let mut seen_by_repo: Vec<(String, Vec<String>)> = Vec::new();
     let mut nodes: Vec<Node> = Vec::new();
     let mut edges: Vec<Edge> = Vec::new();
 
@@ -101,10 +104,11 @@ pub fn index_all_with_cache(
             .canonicalize()
             .with_context(|| format!("저장소 경로를 찾을 수 없습니다: {}", root.display()))?;
         let repo = repo_name(&root);
-        scan_repo(
+        let seen = scan_repo(
             &repo, &root, config, &excludes, &rules, store, &mut stats, &mut table, &mut pending,
             &mut nodes, &mut edges, cache.as_deref_mut(),
         )?;
+        seen_by_repo.push((repo, seen));
         stats.repos += 1;
     }
 
@@ -220,6 +224,11 @@ pub fn index_all_with_cache(
     stats.top_unresolved = tally.top(8);
     stats.nodes = store.upsert_nodes(&nodes)?;
     stats.edges = store.upsert_edges(&edges)?;
+
+    // upsert 뒤에 정리한다 — 먼저 지우면 이번에 다시 만든 노드까지 날아간다.
+    for (repo, seen) in &seen_by_repo {
+        stats.pruned += store.prune_missing_files(repo, seen)?;
+    }
     persist_metrics(store, &stats)?;
     Ok(stats)
 }
@@ -352,7 +361,8 @@ fn scan_repo(
     nodes: &mut Vec<Node>,
     edges: &mut Vec<Edge>,
     mut cache: Option<&mut crate::cache::ExtractCache>,
-) -> Result<()> {
+) -> Result<Vec<String>> {
+    let mut seen_paths: Vec<String> = Vec::new();
     let (branch, head) = git_head(root);
     store.record_repo(repo, &npath::normalize(root), branch.as_deref(), head.as_deref())?;
 
@@ -429,6 +439,7 @@ fn scan_repo(
             Provenance::Fast,
         ));
         table.insert_file(&rel, file_id.clone());
+        seen_paths.push(rel.clone());
         stats.files_indexed += 1;
 
         let counter = stats.by_lang.entry(language.to_string()).or_insert((0, 0));
@@ -542,7 +553,7 @@ fn scan_repo(
             api_call_ids,
         });
     }
-    Ok(())
+    Ok(seen_paths)
 }
 
 /// 해소 지표를 인덱스에 남긴다. `nunchi doctor`가 재계산 없이 읽는다.
@@ -565,6 +576,7 @@ fn persist_metrics(store: &mut SqliteStore, stats: &IndexStats) -> Result<()> {
         "unlinked_api_paths": stats.unlinked_api_paths,
         "injects_resolved": stats.injects_resolved,
         "injects_unresolved": stats.injects_unresolved,
+        "pruned": stats.pruned,
         "cache_hits": stats.cache_hits,
         "cache_misses": stats.cache_misses,
         "commits": stats.commits,

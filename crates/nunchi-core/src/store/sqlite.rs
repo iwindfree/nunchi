@@ -221,6 +221,54 @@ impl SqliteStore {
         Ok(())
     }
 
+    /// 이번 인덱싱에서 발견되지 않은 파일의 노드를 지운다.
+    ///
+    /// upsert만 하면 삭제·이동된 파일이 인덱스에 영원히 남아 `pack`이 존재하지
+    /// 않는 좌표를 반환한다. 워처를 띄워두면 이 누적이 계속 쌓인다.
+    ///
+    /// 경로를 가진 노드만 대상이다 — Commit·Author·ExternalDep은 파일에 매이지
+    /// 않으므로 건드리지 않는다.
+    pub fn prune_missing_files(&mut self, repo: &str, seen_paths: &[String]) -> Result<usize> {
+        let tx = self.conn.transaction()?;
+        tx.execute_batch("CREATE TEMP TABLE IF NOT EXISTS seen_keys (k TEXT PRIMARY KEY)")?;
+        tx.execute("DELETE FROM seen_keys", [])?;
+        {
+            let mut ins = tx.prepare("INSERT OR IGNORE INTO seen_keys (k) VALUES (?1)")?;
+            for p in seen_paths {
+                ins.execute(params![compare_key(p)])?;
+            }
+        }
+
+        // 지울 대상을 먼저 모은다 — FTS는 별도 테이블이라 id로 지워야 한다.
+        let doomed: Vec<String> = {
+            let mut stmt = tx.prepare(
+                "SELECT id FROM nodes
+                 WHERE repo = ?1 AND path IS NOT NULL
+                   AND key NOT IN (SELECT k FROM seen_keys)",
+            )?;
+            let rows = stmt.query_map(params![repo], |r| r.get::<_, String>(0))?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+
+        if !doomed.is_empty() {
+            let mut del_node = tx.prepare("DELETE FROM nodes WHERE id = ?1")?;
+            let mut del_fts = tx.prepare("DELETE FROM nodes_fts WHERE id = ?1")?;
+            for id in &doomed {
+                del_node.execute(params![id])?;
+                del_fts.execute(params![id])?;
+            }
+            // 양쪽 끝 중 하나라도 사라진 엣지를 정리한다.
+            tx.execute(
+                "DELETE FROM edges
+                 WHERE src NOT IN (SELECT id FROM nodes)
+                    OR dst NOT IN (SELECT id FROM nodes)",
+                [],
+            )?;
+        }
+        tx.commit()?;
+        Ok(doomed.len())
+    }
+
     pub fn clear(&mut self) -> Result<()> {
         self.conn.execute_batch(
             "DELETE FROM nodes; DELETE FROM edges; DELETE FROM nodes_fts; DELETE FROM repos;",
@@ -530,6 +578,49 @@ mod tests {
         assert_eq!(one.len(), 1);
         let two = store.neighbors(&a.id, &[EdgeKind::Calls], Direction::Out, 2)?;
         assert_eq!(two.len(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn prune_removes_vanished_files_and_their_edges() -> Result<()> {
+        let mut store = SqliteStore::open_in_memory()?;
+        let a = sample_file("api", "alpha.java", "java");
+        let b = sample_file("api", "beta.java", "java");
+        let mut sym = Node::new(
+            NodeId::symbol("api", "beta.java", "betaFn"),
+            NodeKind::Symbol,
+            "betaFn",
+            "api",
+        );
+        sym.path = Some("beta.java".into());
+        store.upsert_nodes(&[a.clone(), b.clone(), sym.clone()])?;
+        store.upsert_edges(&[Edge::new(
+            b.id.clone(),
+            sym.id.clone(),
+            EdgeKind::Contains,
+            Provenance::Fast,
+        )])?;
+        assert_eq!(store.count_nodes()?, 3);
+
+        // beta.java 가 사라진 상태로 재인덱싱했다고 가정한다.
+        let pruned = store.prune_missing_files("api", &["alpha.java".to_string()])?;
+        assert_eq!(pruned, 2, "파일과 그 심볼이 함께 지워져야 한다");
+        assert_eq!(store.count_nodes()?, 1);
+        assert_eq!(store.count_edges()?, 0, "끊긴 엣지도 정리되어야 한다");
+        // FTS에서도 사라져야 검색에 안 잡힌다.
+        assert!(store.search("betaFn", 5)?.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn prune_spares_pathless_nodes() -> Result<()> {
+        let mut store = SqliteStore::open_in_memory()?;
+        let commit = Node::new(NodeId("commit:api/abc".into()), NodeKind::Commit, "abc", "api");
+        let author = Node::new(NodeId("author:x@y".into()), NodeKind::Author, "x", "api");
+        store.upsert_nodes(&[commit, author])?;
+        // 경로가 없는 노드는 파일 목록과 무관하다.
+        assert_eq!(store.prune_missing_files("api", &[])?, 0);
+        assert_eq!(store.count_nodes()?, 2);
         Ok(())
     }
 

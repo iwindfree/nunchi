@@ -268,6 +268,9 @@ fn cmd_index(config_arg: Option<PathBuf>, rebuild: bool, watch: bool) -> Result<
     println!("  노드     {}", store.count_nodes()?);
     println!("  엣지     {}", store.count_edges()?);
     println!("  심볼     {}", stats.symbols);
+    if stats.pruned > 0 {
+        println!("  정리     {} 노드 (사라진 파일)", stats.pruned);
+    }
     if stats.cache_hits + stats.cache_misses > 0 {
         println!(
             "  캐시     적중 {}/{} ({:.0}%)",

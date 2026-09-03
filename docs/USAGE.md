@@ -67,6 +67,10 @@ nunchi index --watch        # 데몬. 파일 변경을 감시하며 재인덱싱
 `--watch`는 500ms debounce로 변경을 묶습니다. 브랜치를 전환해도 이벤트 폭풍이
 나지 않고, 되돌아올 때는 캐시 적중으로 재파싱이 0회가 됩니다.
 
+인덱싱이 끝나면 **이번에 발견되지 않은 파일의 노드는 자동으로 제거**됩니다.
+삭제·이동한 파일 때문에 `--rebuild`를 돌릴 필요가 없습니다.
+(Commit·Author 같은 파일에 매이지 않은 노드는 그대로 둡니다.)
+
 ### ③ `nunchi doctor` — 진짜 관문
 
 ```bash
@@ -270,3 +274,4 @@ nunchi pack "$TASK" --json && nunchi find "OrderService" --json
 | 호출 엣지가 거의 없음 | `nunchi doctor`의 미해소 상위 확인. 프레임워크 규칙 추가 필요 |
 | 한국어 질의가 안 먹음 | `[semantic.terms]`에 용어 매핑 추가 |
 | 팩 결과가 낡음 | `stale` 필드 확인. `nunchi index --watch`를 띄우거나 재인덱싱 |
+| 지운 파일이 계속 나옴 | `nunchi index`가 자동 정리합니다. 그래도 남으면 `--rebuild` |
