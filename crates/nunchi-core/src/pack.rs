@@ -127,6 +127,18 @@ pub struct PackOptions {
     pub seed_limit: usize,
     pub candidate_limit: usize,
     pub damping: f32,
+    /// 최고 점수 대비 이 비율 미만인 항목은 담지 않는다.
+    ///
+    /// 예산을 항상 끝까지 채우면 관련 코드가 적은 태스크에서 손해가 난다.
+    /// 벤치에서 실측: 관련 파일이 3.4k뿐인 태스크에 4k 예산을 다 쓰면 −15%가 된다.
+    /// 예산은 **상한이지 목표가 아니다.**
+    pub min_score_ratio: f32,
+    /// 팩에 담길 자격을 얻는 최소 관련성(정규화된 PPR).
+    ///
+    /// 중심성과 최근성은 **관련 노드들 사이의 순위를 가르는 신호**이지
+    /// 관련성 자체가 아니다. 이 문턱이 없으면 허브 심볼(`save`, `getBySlug`)이
+    /// 질의와 아무 상관 없이 중심성만으로 팩에 들어온다(벤치에서 27개 중 12개가 그랬다).
+    pub min_relevance: f32,
 }
 
 impl Default for PackOptions {
@@ -138,6 +150,8 @@ impl Default for PackOptions {
             seed_limit: 12,
             candidate_limit: 120,
             damping: DEFAULT_DAMPING,
+            min_score_ratio: 0.08,
+            min_relevance: 0.02,
         }
     }
 }
@@ -219,7 +233,8 @@ pub fn build_pack(
         let id = graph.id_at(i);
         let p = ppr[i] / max_ppr;
         let b = bm25.get(&id.0).copied().unwrap_or(0.0);
-        if p < 1e-4 && b == 0.0 {
+        // 질의와의 관련성(어휘 일치 또는 그래프 근접)이 있어야 후보가 된다.
+        if b <= 0.0 && p < opts.min_relevance {
             continue;
         }
         let Some((kind, mtime)) = store.node_kind_and_mtime(id)? else { continue };
@@ -259,8 +274,15 @@ pub fn build_pack(
     let mut covered_files: std::collections::HashSet<(String, String)> =
         std::collections::HashSet::new();
 
+    let top_score = scored.first().map(|(_, s, _)| *s).unwrap_or(0.0);
+    let floor = top_score * opts.min_score_ratio;
+
     for (rank_pos, (idx, score, why)) in scored.iter().enumerate() {
         if used >= opts.budget {
+            break;
+        }
+        // 예산이 남아도 기여가 미미한 항목은 담지 않는다.
+        if *score < floor {
             break;
         }
         let id = graph.id_at(*idx);
@@ -588,6 +610,27 @@ mod tests {
         assert_eq!(Tier::L2.lower(), Some(Tier::L1));
         assert_eq!(Tier::L1.lower(), Some(Tier::L0));
         assert_eq!(Tier::L0.lower(), None);
+    }
+
+    #[test]
+    fn centrality_alone_does_not_qualify() {
+        let opts = PackOptions::default();
+        // bm25도 없고 그래프 근접도 없는 노드는 중심성이 아무리 높아도 후보가 아니다.
+        let (b, p) = (0.0f32, 0.001f32);
+        assert!(b <= 0.0 && p < opts.min_relevance, "허브 심볼은 걸러져야 한다");
+        // 어휘 일치가 있으면 근접이 없어도 후보다.
+        let (b2, p2) = (0.4f32, 0.0f32);
+        assert!(!(b2 <= 0.0 && p2 < opts.min_relevance));
+    }
+
+    #[test]
+    fn score_floor_is_relative_to_top() {
+        // 예산은 상한이지 목표가 아니다 — 최고 점수의 8% 미만은 잘라낸다.
+        let opts = PackOptions::default();
+        let top = 1.0f32;
+        let floor = top * opts.min_score_ratio;
+        assert!(0.5 > floor, "관련 높은 항목은 남는다");
+        assert!(0.01 < floor, "기여가 미미한 항목은 잘린다");
     }
 
     #[test]

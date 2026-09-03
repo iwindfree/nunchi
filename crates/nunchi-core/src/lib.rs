@@ -5,6 +5,7 @@
 //!
 //! 설계 문서는 저장소 루트의 `PLAN.md`를 참조한다.
 
+pub mod bench;
 pub mod cache;
 pub mod config;
 pub mod extract;

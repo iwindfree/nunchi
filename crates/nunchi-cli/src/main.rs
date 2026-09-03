@@ -78,6 +78,16 @@ enum Command {
         #[arg(long)]
         toml: bool,
     },
+    /// 벤치 — grounded vs ungrounded 토큰·recall 실측
+    Bench {
+        /// 태스크 파일 (JSONL). 기본: nunchi.toml 옆의 bench/tasks.jsonl
+        #[arg(long)]
+        tasks: Option<PathBuf>,
+        #[arg(long, default_value_t = 4000)]
+        budget: usize,
+        #[arg(long)]
+        json: bool,
+    },
     /// TUI — 그래프 탐색·팩 미리보기·가중치 튜닝
     Tui,
 }
@@ -109,6 +119,7 @@ fn main() -> Result<()> {
             serve::run(config, db_path)
         }
         Command::Pack { task, budget, json } => cmd_pack(cli.config, &task, budget, json),
+        Command::Bench { tasks, budget, json } => cmd_bench(cli.config, tasks, budget, json),
         Command::Rules { toml: as_toml } => cmd_rules(cli.config, as_toml),
         Command::Tui => {
             let config_path = match cli.config.clone() {
@@ -419,6 +430,85 @@ fn cmd_pack(config_arg: Option<PathBuf>, task: &str, budget: usize, json: bool) 
         print!("{}", nunchi_core::pack::render_text(&pack));
     }
     Ok(())
+}
+
+fn cmd_bench(
+    config_arg: Option<PathBuf>,
+    tasks_arg: Option<PathBuf>,
+    budget: usize,
+    json: bool,
+) -> Result<()> {
+    let (config, db_path) = resolve(config_arg.clone())?;
+    if !db_path.exists() {
+        anyhow::bail!("인덱스가 없습니다. `nunchi index`를 먼저 실행하세요.");
+    }
+    let base = db_path.parent().and_then(|p| p.parent()).unwrap_or(Path::new("."));
+    let tasks_path = tasks_arg.unwrap_or_else(|| base.join("bench").join("tasks.jsonl"));
+    if !tasks_path.exists() {
+        anyhow::bail!(
+            "태스크 파일이 없습니다: {}\n\n             한 줄에 하나씩 JSON으로 적으세요:\n             {{\"task\":\"댓글 삭제 로직 수정\",\"expect\":[\"CommentController.java\"]}}\n\n             expect는 이 태스크를 풀려면 반드시 봐야 하는 좌표입니다(부분 경로 일치).",
+            tasks_path.display()
+        );
+    }
+
+    let store = SqliteStore::open(&db_path)?;
+    let graph = nunchi_core::graph::MemGraph::load(&store)?;
+    let roots = nunchi_core::pack::repo_roots(&config);
+    let opts = nunchi_core::pack::PackOptions {
+        budget,
+        weights: config.rank,
+        synonyms: config.semantic.clone(),
+        ..Default::default()
+    };
+    let tasks = nunchi_core::bench::load_tasks(&tasks_path)?;
+    let report = nunchi_core::bench::run(&store, &graph, &roots, &tasks, &opts)?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
+
+    println!("태스크 {}개 · 예산 {budget}\n", report.tasks.len());
+    println!("{:<34}{:>9}{:>11}{:>9}{:>8}", "task", "grounded", "ungrounded", "절감", "recall");
+    for t in &report.tasks {
+        let recall = t.recall.map(|r| format!("{:.0}%", r * 100.0)).unwrap_or_else(|| "—".into());
+        println!(
+            "{:<34}{:>9}{:>11}{:>8.0}%{:>8}",
+            truncate(&t.task, 32),
+            t.grounded_tokens,
+            t.ungrounded_tokens,
+            t.saving_pct,
+            recall
+        );
+    }
+    println!("\n{:<34}{:>9}{:>11}{:>8.0}%{:>8}",
+        "평균",
+        report.mean_grounded,
+        report.mean_ungrounded,
+        report.mean_saving_pct,
+        report.mean_recall.map(|r| format!("{:.0}%", r * 100.0)).unwrap_or_else(|| "—".into()));
+
+    let missed: Vec<&nunchi_core::bench::TaskResult> =
+        report.tasks.iter().filter(|t| !t.missed.is_empty()).collect();
+    if !missed.is_empty() {
+        println!("\n놓친 좌표 — 토큰만 줄고 답을 놓치면 무의미하다");
+        for t in missed {
+            println!("  {}", truncate(&t.task, 60));
+            for m in &t.missed {
+                println!("    ✗ {m}");
+            }
+        }
+    }
+    println!("\n⚠ {}", report.note);
+    Ok(())
+}
+
+fn truncate(s: &str, n: usize) -> String {
+    if s.chars().count() <= n {
+        s.to_string()
+    } else {
+        s.chars().take(n - 1).chain(std::iter::once('…')).collect()
+    }
 }
 
 fn cmd_rules(config_arg: Option<PathBuf>, as_toml: bool) -> Result<()> {
