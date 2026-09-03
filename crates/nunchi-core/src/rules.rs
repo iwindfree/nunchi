@@ -54,6 +54,15 @@ pub struct RouteRule {
     /// `method = RequestMethod.POST` 처럼 인자가 메서드를 지정하는 형태를 허용한다.
     #[serde(default)]
     pub method_from_args_prefix: Option<String>,
+    /// 데코레이터에 수신자가 붙는 형태(`@app.get`, `@router.post`)에서 허용할 수신자.
+    ///
+    /// 비어 있으면 수신자를 따지지 않는다(Java `@GetMapping`). 파이썬은
+    /// `@cache.get` 같은 오탐을 막기 위해 이 목록이 필요하다.
+    #[serde(default)]
+    pub receivers: Vec<String>,
+    /// `methods=["POST"]`(Flask)처럼 인자 안의 배열이 메서드를 지정하는 형태.
+    #[serde(default)]
+    pub method_from_args_list: Option<String>,
 }
 
 /// 클래스 어노테이션이 하위 라우트들의 경로 접두를 정한다.
@@ -138,6 +147,30 @@ pub fn builtin() -> FrameworkRules {
         annotation: anno.into(),
         method: method.into(),
         method_from_args_prefix: None,
+        receivers: Vec::new(),
+        method_from_args_list: None,
+    };
+    // FastAPI `@app.get("/x")` · Flask `@app.route("/x", methods=["POST"])`
+    let py_receivers: Vec<String> = ["app", "router", "api", "blueprint", "bp"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let py_route = |name: &str, method: &str| RouteRule {
+        lang: "python".into(),
+        annotation: name.into(),
+        method: method.into(),
+        method_from_args_prefix: None,
+        receivers: py_receivers.clone(),
+        method_from_args_list: None,
+    };
+    // ASP.NET `[HttpGet("orders")]`
+    let cs_route = |anno: &str, method: &str| RouteRule {
+        lang: "csharp".into(),
+        annotation: anno.into(),
+        method: method.into(),
+        method_from_args_prefix: None,
+        receivers: Vec::new(),
+        method_from_args_list: None,
     };
 
     FrameworkRules {
@@ -153,13 +186,40 @@ pub fn builtin() -> FrameworkRules {
                 annotation: "RequestMapping".into(),
                 method: "ANY".into(),
                 method_from_args_prefix: Some("RequestMethod.".into()),
+                receivers: Vec::new(),
+                method_from_args_list: None,
             },
+            py_route("get", "GET"),
+            py_route("post", "POST"),
+            py_route("put", "PUT"),
+            py_route("delete", "DELETE"),
+            py_route("patch", "PATCH"),
+            RouteRule {
+                lang: "python".into(),
+                annotation: "route".into(),
+                method: "ANY".into(),
+                method_from_args_prefix: None,
+                receivers: py_receivers.clone(),
+                // Flask는 methods=["POST"] 로 지정한다
+                method_from_args_list: Some("methods".into()),
+            },
+            cs_route("HttpGet", "GET"),
+            cs_route("HttpPost", "POST"),
+            cs_route("HttpPut", "PUT"),
+            cs_route("HttpDelete", "DELETE"),
+            cs_route("HttpPatch", "PATCH"),
         ],
-        base_path: vec![BasePathRule {
-            lang: "java".into(),
-            annotation: "RequestMapping".into(),
-        }],
-        bean: vec![BeanRule {
+        base_path: vec![
+            BasePathRule { lang: "java".into(), annotation: "RequestMapping".into() },
+            // ASP.NET: [Route("api/[controller]")]
+            BasePathRule { lang: "csharp".into(), annotation: "Route".into() },
+        ],
+        bean: vec![
+            BeanRule {
+            lang: "csharp".into(),
+            annotations: ["ApiController", "Controller"].iter().map(|s| s.to_string()).collect(),
+        },
+        BeanRule {
             lang: "java".into(),
             annotations: [
                 "RestController",
@@ -229,6 +289,35 @@ pub fn builtin() -> FrameworkRules {
                     .map(|s| s.to_string())
                     .collect(),
             },
+            // requests / httpx / aiohttp — 파이썬 HTTP 클라이언트
+            HttpClientRule {
+                lang: "python".into(),
+                callee: None,
+                receiver_methods: ["get", "post", "put", "delete", "patch"]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
+                method: None,
+                url_arg: 0,
+                // app·router는 라우트 정의다. cache·session은 HTTP가 아닐 수 있으나
+                // session.get(url)은 실제 클라이언트이므로 제외하지 않는다.
+                exclude_receivers: ["app", "router", "blueprint", "bp", "cache", "redis"]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
+            },
+            // C# HttpClient
+            HttpClientRule {
+                lang: "csharp".into(),
+                callee: None,
+                receiver_methods: ["GetAsync", "PostAsync", "PutAsync", "DeleteAsync", "PatchAsync"]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
+                method: None,
+                url_arg: 0,
+                exclude_receivers: Vec::new(),
+            },
         ],
     }
 }
@@ -261,6 +350,21 @@ impl FrameworkRules {
         self.route
             .iter()
             .find(|r| Self::lang_matches(&r.lang, lang) && r.annotation == annotation)
+    }
+
+    /// 수신자가 붙는 데코레이터(`app.get`)용. 수신자 허용 목록까지 확인한다.
+    pub fn route_for_receiver(
+        &self,
+        lang: &str,
+        receiver: &str,
+        name: &str,
+    ) -> Option<&RouteRule> {
+        self.route.iter().find(|r| {
+            Self::lang_matches(&r.lang, lang)
+                && r.annotation == name
+                && (r.receivers.is_empty()
+                    || r.receivers.iter().any(|x| x.eq_ignore_ascii_case(receiver)))
+        })
     }
 
     pub fn is_base_path_annotation(&self, lang: &str, annotation: &str) -> bool {
@@ -321,6 +425,23 @@ mod tests {
             .unwrap();
         assert!(receiver_rule.exclude_receivers.iter().any(|x| x == "this"));
         assert!(receiver_rule.exclude_receivers.iter().any(|x| x == "app"));
+    }
+
+    #[test]
+    fn builtin_covers_fastapi_flask_and_aspnet() {
+        let r = FrameworkRules::effective(&FrameworkRules::default());
+        // FastAPI: @app.get / @router.post
+        assert!(r.route_for_receiver("python", "app", "get").is_some());
+        assert!(r.route_for_receiver("python", "router", "post").is_some());
+        // 임의 수신자는 라우트가 아니다 — @cache.get 오탐 방지
+        assert!(r.route_for_receiver("python", "cache", "get").is_none());
+        // Flask: @app.route(..., methods=["POST"])
+        let flask = r.route_for_receiver("python", "app", "route").unwrap();
+        assert_eq!(flask.method_from_args_list.as_deref(), Some("methods"));
+        // ASP.NET
+        assert_eq!(r.route_for("csharp", "HttpGet").unwrap().method, "GET");
+        assert!(r.is_base_path_annotation("csharp", "Route"));
+        assert!(r.bean_stereotype("csharp", "ApiController"));
     }
 
     #[test]

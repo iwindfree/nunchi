@@ -176,11 +176,42 @@ fn text<'a>(node: Node, src: &'a [u8]) -> &'a str {
 
 // ─────────────────────────── Java / Spring ───────────────────────────
 
-/// 선언 노드에 붙은 어노테이션들을 `(이름, 인자원문)`으로 돌려준다.
+/// 선언 노드에 붙은 어노테이션/어트리뷰트를 `(이름, 인자원문)`으로 돌려준다.
+///
+/// 두 형태를 모두 다룬다:
+/// - Java: `modifiers > marker_annotation | annotation`
+/// - C#:   `attribute_list > attribute > identifier + attribute_argument_list`
 fn annotations_of<'a>(decl: Node<'a>, src: &'a [u8]) -> Vec<(String, Option<String>)> {
     let mut out = Vec::new();
     let mut cursor = decl.walk();
     for child in decl.children(&mut cursor) {
+        // C# 어트리뷰트
+        if child.kind() == "attribute_list" {
+            let mut attrs = child.walk();
+            for attr in child.children(&mut attrs) {
+                if attr.kind() != "attribute" {
+                    continue;
+                }
+                let mut parts = attr.walk();
+                let mut name = None;
+                let mut args = None;
+                for piece in attr.children(&mut parts) {
+                    match piece.kind() {
+                        "identifier" | "qualified_name" if name.is_none() => {
+                            name = Some(text(piece, src).to_string());
+                        }
+                        "attribute_argument_list" => {
+                            args = Some(text(piece, src).to_string());
+                        }
+                        _ => {}
+                    }
+                }
+                if let Some(name) = name {
+                    out.push((name, args));
+                }
+            }
+            continue;
+        }
         if child.kind() != "modifiers" {
             continue;
         }
@@ -223,10 +254,7 @@ fn path_from_args(args: &str) -> Option<String> {
 }
 
 fn first_string_literal(s: &str) -> Option<String> {
-    let start = s.find('"')?;
-    let rest = &s[start + 1..];
-    let end = rest.find('"')?;
-    Some(rest[..end].to_string())
+    first_string_literal_any(s)
 }
 
 /// `method = RequestMethod.POST` → `POST` (접두는 규칙이 정한다)
@@ -245,8 +273,123 @@ pub fn extract_annotated(
     rules: &FrameworkRules,
 ) -> FrameworkFacts {
     let mut facts = FrameworkFacts::default();
-    walk_java(root, src, lang, rules, "", &mut facts);
+    match lang {
+        // 파이썬은 데코레이터가 어노테이션 자리를 대신한다.
+        "python" => walk_python(root, src, lang, rules, &mut facts),
+        // C# 어트리뷰트 `[HttpGet("x")]` 는 Java 어노테이션과 구조가 같다.
+        _ => walk_java(root, src, lang, rules, "", &mut facts),
+    }
     facts
+}
+
+// ─────────────────────────── Python (FastAPI / Flask) ───────────────────────────
+
+/// `@app.get("/orders")` 를 `(수신자, 이름, 인자원문)` 으로 분해한다.
+fn python_decorators<'a>(node: Node<'a>, src: &'a [u8]) -> Vec<(String, String, String)> {
+    let mut out = Vec::new();
+    let Some(parent) = node.parent() else { return out };
+    if parent.kind() != "decorated_definition" {
+        return out;
+    }
+    let mut cursor = parent.walk();
+    for child in parent.children(&mut cursor) {
+        if child.kind() != "decorator" {
+            continue;
+        }
+        let raw = text(child, src).trim_start_matches('@');
+        // `app.get("/x")` → 수신자 `app`, 이름 `get`, 인자 `("/x")`
+        let (head, args) = match raw.find('(') {
+            Some(i) => (&raw[..i], raw[i..].to_string()),
+            None => (raw, String::new()),
+        };
+        let (receiver, name) = match head.rsplit_once('.') {
+            Some((r, n)) => (r.to_string(), n.to_string()),
+            None => (String::new(), head.to_string()),
+        };
+        out.push((receiver, name.trim().to_string(), args));
+    }
+    out
+}
+
+fn walk_python(
+    node: Node,
+    src: &[u8],
+    lang: &str,
+    rules: &FrameworkRules,
+    facts: &mut FrameworkFacts,
+) {
+    if node.kind() == "function_definition" {
+        let handler = node
+            .child_by_field_name("name")
+            .map(|n| text(n, src).to_string())
+            .unwrap_or_default();
+        for (receiver, name, args) in python_decorators(node, src) {
+            let Some(rule) = rules.route_for_receiver(lang, &receiver, &name) else { continue };
+            // Flask: methods=["POST"]
+            let method = rule
+                .method_from_args_list
+                .as_deref()
+                .and_then(|key| method_from_args_list(&args, key))
+                .unwrap_or_else(|| rule.method.clone());
+            let raw = first_string_literal(&args).unwrap_or_default();
+            let path = normalize_route_path(&raw);
+            facts.routes.push(RouteFact {
+                method,
+                path: if path.is_empty() { "/".into() } else { path },
+                raw_path: if raw.is_empty() { "/".into() } else { raw },
+                handler: handler.clone(),
+                span: span_of(node),
+            });
+        }
+    }
+
+    // SQLAlchemy: class Order(Base): __tablename__ = "orders"
+    if node.kind() == "class_definition" {
+        let name = node
+            .child_by_field_name("name")
+            .map(|n| text(n, src).to_string())
+            .unwrap_or_default();
+        for rule in rules.persistence_rules(lang) {
+            let Some(attr) = rule.table_attribute.as_deref() else { continue };
+            let body = text(node, src);
+            if let Some(pos) = body.find(attr) {
+                if let Some(table) = first_string_literal(&body[pos..]) {
+                    facts.entities.push(EntityFact {
+                        name: name.clone(),
+                        table: Some(table),
+                        span: span_of(node),
+                    });
+                    break;
+                }
+            }
+        }
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        walk_python(child, src, lang, rules, facts);
+    }
+}
+
+/// `methods=["POST", "GET"]` 에서 첫 메서드를 꺼낸다.
+fn method_from_args_list(args: &str, key: &str) -> Option<String> {
+    let pos = args.find(key)?;
+    let rest = &args[pos + key.len()..];
+    let open = rest.find('[')?;
+    let close = rest[open..].find(']')? + open;
+    first_string_literal_any(&rest[open..close]).map(|m| m.to_uppercase())
+}
+
+fn first_string_literal_any(s: &str) -> Option<String> {
+    for quote in ['"', '\''] {
+        if let Some(start) = s.find(quote) {
+            let rest = &s[start + 1..];
+            if let Some(end) = rest.find(quote) {
+                return Some(rest[..end].to_string());
+            }
+        }
+    }
+    None
 }
 
 fn walk_java(
@@ -558,7 +701,10 @@ fn api_call_of(
                 .any(|m| m.eq_ignore_ascii_case(&verb))
                 .then(|| {
                     // method 미지정이면 호출된 메서드 이름이 곧 HTTP 메서드다.
-                    let m = rule.method.clone().unwrap_or_else(|| verb.to_uppercase());
+                    // C# `GetAsync` 처럼 접미가 붙는 관용구를 벗긴다.
+                    let m = rule.method.clone().unwrap_or_else(|| {
+                        verb.trim_end_matches("async").to_uppercase()
+                    });
                     (m, rule.url_arg)
                 })
         }
@@ -843,5 +989,83 @@ public interface OrderMapper {
         // 인터페이스 메서드는 method_declaration 이 아닐 수 있으므로 테이블 참조로 확인한다.
         let tables: Vec<&str> = f.table_refs.iter().map(|t| t.table.as_str()).collect();
         assert!(tables.contains(&"orders"), "MyBatis 매퍼에서 테이블을 못 찾음: {:?}", f.table_refs);
+    }
+}
+
+#[cfg(test)]
+mod python_csharp_tests {
+    use super::*;
+    use tree_sitter::Parser;
+
+    fn facts(lang_name: &str, ts: tree_sitter::Language, src: &str) -> FrameworkFacts {
+        let mut p = Parser::new();
+        p.set_language(&ts).unwrap();
+        let tree = p.parse(src, None).unwrap();
+        let rules = FrameworkRules::effective(&FrameworkRules::default());
+        extract_annotated(tree.root_node(), src.as_bytes(), lang_name, &rules)
+    }
+
+    #[test]
+    fn fastapi_and_flask_routes() {
+        let f = facts("python", tree_sitter_python::LANGUAGE.into(), r#"
+@app.get("/api/orders/{order_id}")
+def get_order(order_id: int):
+    return None
+
+@router.post("/api/orders")
+def create_order():
+    return None
+
+@app.route("/legacy", methods=["POST"])
+def legacy():
+    return None
+
+@cache.get("/not-a-route")
+def cached():
+    return None
+"#);
+        let got: Vec<(String, String, String)> = f
+            .routes
+            .iter()
+            .map(|r| (r.method.clone(), r.path.clone(), r.handler.clone()))
+            .collect();
+
+        assert!(got.contains(&("GET".into(), "/api/orders/{}".into(), "get_order".into())), "{got:?}");
+        assert!(got.contains(&("POST".into(), "/api/orders".into(), "create_order".into())), "{got:?}");
+        assert!(got.contains(&("POST".into(), "/legacy".into(), "legacy".into())), "Flask methods=: {got:?}");
+        // @cache.get 은 라우트가 아니다
+        assert!(!got.iter().any(|(_, p, _)| p.contains("not-a-route")), "오탐: {got:?}");
+    }
+
+    #[test]
+    fn sqlalchemy_tablename() {
+        let f = facts("python", tree_sitter_python::LANGUAGE.into(), r#"
+class Order(Base):
+    __tablename__ = "orders"
+    id = Column(Integer, primary_key=True)
+"#);
+        assert_eq!(f.entities.len(), 1, "{:?}", f.entities);
+        assert_eq!(f.entities[0].table.as_deref(), Some("orders"));
+    }
+
+    #[test]
+    fn aspnet_attributes() {
+        let f = facts("csharp", tree_sitter_c_sharp::LANGUAGE.into(), r#"
+[ApiController]
+[Route("api/orders")]
+public class OrderController : ControllerBase
+{
+    [HttpGet("{id}")]
+    public IActionResult GetOrder(int id) { return null; }
+
+    [HttpPost]
+    public IActionResult Create() { return null; }
+}
+"#);
+        let got: Vec<(String, String)> =
+            f.routes.iter().map(|r| (r.method.clone(), r.path.clone())).collect();
+        assert!(got.contains(&("GET".into(), "/api/orders/{}".into())), "{got:?}");
+        assert!(got.contains(&("POST".into(), "/api/orders".into())), "{got:?}");
+        assert!(f.beans.iter().any(|b| b.name == "OrderController"), "{:?}", f.beans);
     }
 }
