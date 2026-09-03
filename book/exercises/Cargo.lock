@@ -3,6 +3,12 @@
 version = 4
 
 [[package]]
+name = "anyhow"
+version = "1.0.104"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
+
+[[package]]
 name = "ex_00_02_a"
 version = "0.1.0"
 
@@ -64,4 +70,55 @@ version = "0.1.0"
 
 [[package]]
 name = "ex_01_06_a"
+version = "0.1.0"
+
+[[package]]
+name = "ex_02_01_a"
+version = "0.1.0"
+
+[[package]]
+name = "ex_02_01_b"
+version = "0.1.0"
+
+[[package]]
+name = "ex_02_02_a"
+version = "0.1.0"
+
+[[package]]
+name = "ex_02_03_a"
+version = "0.1.0"
+
+[[package]]
+name = "ex_02_03_b"
+version = "0.1.0"
+
+[[package]]
+name = "ex_02_04_a"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+]
+
+[[package]]
+name = "ex_03_01_a"
+version = "0.1.0"
+
+[[package]]
+name = "ex_03_01_b"
+version = "0.1.0"
+
+[[package]]
+name = "ex_03_02_a"
+version = "0.1.0"
+
+[[package]]
+name = "ex_03_02_b"
+version = "0.1.0"
+
+[[package]]
+name = "ex_03_03_a"
+version = "0.1.0"
+
+[[package]]
+name = "ex_03_03_b"
 version = "0.1.0"

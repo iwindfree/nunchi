@@ -110,9 +110,18 @@ def check_solutions_exist() -> None:
 
 
 def check_summary_files_exist(order: dict[str, int]) -> None:
+    """목차에 있는 장이 실제로 쓰였는지 확인한다.
+
+    mdbook build 는 목차에 있으나 없는 파일을 빈 파일로 만들어 둔다.
+    그래서 "파일이 있는가" 만 보면 아직 쓰지 않은 장을 놓친다.
+    내용이 있는지까지 확인한다.
+    """
     for rel in order:
-        if not (SRC / rel).is_file():
+        path = SRC / rel
+        if not path.is_file():
             warnings.append(f"목차에 있으나 파일이 없다 → {rel}")
+        elif len(path.read_text(encoding="utf-8").strip()) < 100:
+            warnings.append(f"아직 쓰지 않은 장 → {rel}")
 
 
 def main() -> int:
