@@ -1,0 +1,22 @@
+[book]
+title = "nunchi 코드와 Rust 배우기"
+authors = ["iwindfree"]
+language = "ko"
+src = "src"
+
+[output.html]
+default-theme = "rust"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/iwindfree/nunchi"
+edit-url-template = "https://github.com/iwindfree/nunchi/edit/main/book/{path}"
+
+[output.html.fold]
+enable = true
+level = 1
+
+[output.html.search]
+enable = true
+limit-results = 20
+
+[output.html.playground]
+editable = false

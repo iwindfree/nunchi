@@ -1,0 +1,19 @@
+# 연습문제 전용 워크스페이스입니다.
+#
+# 본체 워크스페이스와 분리한 이유가 있습니다. 연습문제는 일부러 컴파일이
+# 실패하는 상태로 둡니다. 본체에 포함하면 `cargo test`가 항상 실패하여
+# 정상적인 개발이 불가능해집니다.
+#
+# 사용법:
+#   cd book/exercises
+#   cargo test -p ex_01_04_a        한 문제만 확인합니다
+#   cargo test                      지금까지 푼 것을 모두 확인합니다
+
+[workspace]
+resolver = "3"
+members = ["ex_*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+publish = false

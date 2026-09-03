@@ -1,0 +1,5 @@
+[package]
+name = "ex_00_02_b"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true

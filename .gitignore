@@ -8,3 +8,7 @@
 # 랭킹 가중치·프레임워크 규칙·용어 사전은 nunchi.shared.toml 로 분리되어
 # 커밋되며, 양쪽 머신이 같은 값을 쓴다.
 nunchi.toml
+
+# mdBook 산출물
+/book/book
+/book/exercises/target
