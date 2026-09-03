@@ -13,6 +13,7 @@ pub mod graph;
 pub mod history;
 pub mod index;
 pub mod lang;
+pub mod mapper_xml;
 pub mod model;
 pub mod pack;
 pub mod path;

@@ -24,6 +24,9 @@ pub struct FrameworkRules {
     pub inject: Vec<InjectRule>,
     #[serde(default)]
     pub http_client: Vec<HttpClientRule>,
+    /// 영속 계층 — 엔티티·테이블·SQL 매퍼
+    #[serde(default)]
+    pub persistence: Vec<PersistenceRule>,
 }
 
 impl Default for FrameworkRules {
@@ -35,6 +38,7 @@ impl Default for FrameworkRules {
             bean: Vec::new(),
             inject: Vec::new(),
             http_client: Vec::new(),
+            persistence: Vec::new(),
         }
     }
 }
@@ -106,6 +110,27 @@ pub struct HttpClientRule {
     pub exclude_receivers: Vec<String>,
 }
 
+/// 영속 계층 판별. JPA · MyBatis · SQLAlchemy가 모두 이 틀에 들어간다.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PersistenceRule {
+    pub lang: String,
+    /// 클래스를 엔티티로 표시하는 어노테이션 (`Entity`, `Table`)
+    #[serde(default)]
+    pub entity_annotations: Vec<String>,
+    /// 테이블명을 담는 어노테이션 (`Table(name="orders")`)
+    #[serde(default)]
+    pub table_annotations: Vec<String>,
+    /// 메서드에 붙어 SQL을 담는 어노테이션 (MyBatis `@Select`/`@Insert`)
+    #[serde(default)]
+    pub sql_annotations: Vec<String>,
+    /// 이 이름의 클래스 속성이 테이블명을 담는다 (SQLAlchemy `__tablename__`)
+    #[serde(default)]
+    pub table_attribute: Option<String>,
+    /// 이 상위 타입을 상속하면 리포지터리로 본다 (`JpaRepository`)
+    #[serde(default)]
+    pub repository_supertypes: Vec<String>,
+}
+
 /// 내장 기본 규칙. 설정이 비어 있어도 Spring + React가 바로 동작한다.
 pub fn builtin() -> FrameworkRules {
     let java_route = |anno: &str, method: &str| RouteRule {
@@ -154,6 +179,32 @@ pub fn builtin() -> FrameworkRules {
             final_fields: true,
             constructor_params: true,
         }],
+        persistence: vec![
+            PersistenceRule {
+                lang: "java".into(),
+                entity_annotations: vec!["Entity".into()],
+                table_annotations: vec!["Table".into()],
+                // MyBatis 어노테이션 매퍼 — 한국 기업 Spring 환경에서 비중이 크다.
+                sql_annotations: ["Select", "Insert", "Update", "Delete", "SelectProvider"]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
+                table_attribute: None,
+                repository_supertypes: ["JpaRepository", "CrudRepository", "MongoRepository"]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
+            },
+            PersistenceRule {
+                lang: "python".into(),
+                entity_annotations: Vec::new(),
+                table_annotations: Vec::new(),
+                sql_annotations: Vec::new(),
+                // SQLAlchemy
+                table_attribute: Some("__tablename__".into()),
+                repository_supertypes: Vec::new(),
+            },
+        ],
         http_client: vec![
             HttpClientRule {
                 lang: "typescript".into(),
@@ -194,6 +245,7 @@ impl FrameworkRules {
         merged.bean.extend(user.bean.iter().cloned());
         merged.inject.extend(user.inject.iter().cloned());
         merged.http_client.extend(user.http_client.iter().cloned());
+        merged.persistence.extend(user.persistence.iter().cloned());
         merged
     }
 
@@ -225,6 +277,13 @@ impl FrameworkRules {
 
     pub fn inject_rules(&self, lang: &str) -> Vec<&InjectRule> {
         self.inject
+            .iter()
+            .filter(|r| Self::lang_matches(&r.lang, lang))
+            .collect()
+    }
+
+    pub fn persistence_rules(&self, lang: &str) -> Vec<&PersistenceRule> {
+        self.persistence
             .iter()
             .filter(|r| Self::lang_matches(&r.lang, lang))
             .collect()
@@ -262,6 +321,22 @@ mod tests {
             .unwrap();
         assert!(receiver_rule.exclude_receivers.iter().any(|x| x == "this"));
         assert!(receiver_rule.exclude_receivers.iter().any(|x| x == "app"));
+    }
+
+    #[test]
+    fn builtin_covers_jpa_and_mybatis() {
+        let r = FrameworkRules::effective(&FrameworkRules::default());
+        let java = r.persistence_rules("java");
+        assert!(!java.is_empty());
+        let rule = java[0];
+        assert!(rule.entity_annotations.iter().any(|a| a == "Entity"), "JPA");
+        assert!(rule.sql_annotations.iter().any(|a| a == "Select"), "MyBatis");
+        assert!(rule.repository_supertypes.iter().any(|a| a == "JpaRepository"));
+        // SQLAlchemy
+        assert_eq!(
+            r.persistence_rules("python")[0].table_attribute.as_deref(),
+            Some("__tablename__")
+        );
     }
 
     #[test]

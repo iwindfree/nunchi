@@ -56,6 +56,11 @@ pub struct IndexStats {
     pub pruned: usize,
     pub supertypes: usize,
     pub test_links: usize,
+    // ── 영속 계층 ──
+    pub entities: usize,
+    pub tables: usize,
+    pub persists_to: usize,
+    pub xml_mappers: usize,
 }
 
 pub fn build_exclude_set(patterns: &[String]) -> Result<GlobSet> {
@@ -295,6 +300,68 @@ pub fn index_all_with_cache(
     Ok(stats)
 }
 
+/// 테이블 노드는 솔루션 전역이다 — 같은 테이블을 여러 매퍼가 참조하고,
+/// (같은 DB를 쓴다면) 여러 저장소가 참조한다.
+fn table_node(
+    name: &str,
+    repo: &str,
+    nodes: &mut Vec<Node>,
+    stats: &mut IndexStats,
+) -> NodeId {
+    let normalized = name.to_lowercase();
+    let id = NodeId(format!("table:{normalized}"));
+    let mut node = Node::new(id.clone(), NodeKind::Table, &normalized, repo);
+    node.signature = Some(format!("table {normalized}"));
+    nodes.push(node);
+    stats.tables += 1;
+    id
+}
+
+/// MyBatis XML 매퍼를 인덱싱한다.
+///
+/// statement id는 namespace가 가리키는 Java 인터페이스의 메서드명과 같다.
+/// 그 대응이 XML과 코드를 잇는 다리이므로 `Contract` 노드로 남긴다.
+fn index_xml_mapper(
+    repo: &str,
+    rel: &str,
+    file_id: &NodeId,
+    source: &str,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+    stats: &mut IndexStats,
+) {
+    let facts = crate::mapper_xml::parse(source);
+    stats.xml_mappers += 1;
+
+    for st in &facts.statements {
+        // statement 자체를 심볼로 둔다 — `nunchi find "findById"` 로 XML도 찾게 된다.
+        let sym_id = NodeId::symbol(repo, rel, &st.owner);
+        let mut sym = Node::new(sym_id.clone(), NodeKind::Symbol, &st.owner, repo);
+        sym.path = Some(rel.to_string());
+        sym.span = Some(st.span);
+        sym.lang = Some("xml".into());
+        sym.signature = Some(format!("<{}> {}", st.verb, st.owner));
+        sym.attrs = serde_json::json!({
+            "symbol_kind": "sql_statement",
+            "namespace": facts.namespace,
+        });
+        nodes.push(sym);
+        edges.push(Edge::new(
+            file_id.clone(),
+            sym_id.clone(),
+            EdgeKind::Contains,
+            Provenance::Fast,
+        ));
+
+        let table_id = table_node(&st.table, repo, nodes, stats);
+        edges.push(
+            Edge::new(sym_id, table_id, EdgeKind::PersistsTo, Provenance::Fast)
+                .with_confidence(0.9),
+        );
+        stats.persists_to += 1;
+    }
+}
+
 /// 테스트 파일 판별. 자바(`src/test/`), JS/TS(`*.test.ts`, `__tests__/`),
 /// 파이썬(`test_*.py`), C#(`*Tests.cs`) 관용구를 모두 다룬다.
 pub fn is_test_path(rel: &str) -> bool {
@@ -363,6 +430,31 @@ fn extract_framework(
         stats.routes += 1;
     }
     stats.beans += fw.beans.len();
+
+    // 엔티티 → 테이블
+    for entity in &fw.entities {
+        let entity_id = NodeId::symbol(repo, rel, &entity.name);
+        let table_name = entity.table.clone().unwrap_or_else(|| entity.name.clone());
+        let table_id = table_node(&table_name, repo, nodes, stats);
+        edges.push(
+            Edge::new(entity_id, table_id, EdgeKind::PersistsTo, Provenance::Fast)
+                // 테이블명이 명시되지 않으면 클래스명 추정이므로 확신도를 낮춘다.
+                .with_confidence(if entity.table.is_some() { 0.95 } else { 0.6 }),
+        );
+        stats.entities += 1;
+        stats.persists_to += 1;
+    }
+
+    // SQL이 참조하는 테이블 (MyBatis 어노테이션 매퍼)
+    for r in &fw.table_refs {
+        let owner = NodeId::symbol(repo, rel, &r.owner);
+        let table_id = table_node(&r.table, repo, nodes, stats);
+        edges.push(
+            Edge::new(owner, table_id, EdgeKind::PersistsTo, Provenance::Fast)
+                .with_confidence(0.85),
+        );
+        stats.persists_to += 1;
+    }
 
     let mut api_call_ids = Vec::new();
     for (i, call) in fw.api_calls.iter().enumerate() {
@@ -534,6 +626,12 @@ fn scan_repo(
         let counter = stats.by_lang.entry(language.to_string()).or_insert((0, 0));
         counter.0 += 1;
 
+        // MyBatis XML 매퍼는 tree-sitter 대상이 아니지만 영속 계층의 핵심이다.
+        if language == "xml" && crate::mapper_xml::looks_like_mapper(source) {
+            index_xml_mapper(repo, &rel, &file_id, source, nodes, edges, stats);
+            continue;
+        }
+
         // 파서가 없는 언어(yaml/json 등)는 파일 노드까지만.
         let Some(sl) = SupportedLang::from_name(language) else { continue };
         let hash = npath::content_hash(&bytes);
@@ -677,6 +775,10 @@ fn persist_metrics(store: &mut SqliteStore, stats: &IndexStats) -> Result<()> {
         "injects_unresolved": stats.injects_unresolved,
         "pruned": stats.pruned,
         "supertypes": stats.supertypes,
+        "entities": stats.entities,
+        "tables": stats.tables,
+        "persists_to": stats.persists_to,
+        "xml_mappers": stats.xml_mappers,
         "test_links": stats.test_links,
         "cache_hits": stats.cache_hits,
         "cache_misses": stats.cache_misses,

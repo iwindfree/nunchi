@@ -17,6 +17,28 @@ pub struct FrameworkFacts {
     pub beans: Vec<BeanFact>,
     pub injects: Vec<InjectFact>,
     pub api_calls: Vec<ApiCallFact>,
+    pub entities: Vec<EntityFact>,
+    /// (소유 심볼, 테이블명) — SQL 어노테이션·매퍼에서 추출
+    pub table_refs: Vec<TableRefFact>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EntityFact {
+    /// 클래스 이름
+    pub name: String,
+    /// 매핑되는 테이블. 명시가 없으면 클래스명에서 추정하지 않고 None으로 둔다.
+    pub table: Option<String>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TableRefFact {
+    /// 이 SQL을 담은 심볼(메서드) 이름
+    pub owner: String,
+    pub table: String,
+    /// select / insert / update / delete
+    pub verb: String,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -257,6 +279,26 @@ fn walk_java(
             .unwrap_or_default();
         let class_base = if class_base == "/" { String::new() } else { class_base };
 
+        // 엔티티 — @Entity / @Table(name="orders")
+        for rule in rules.persistence_rules(lang) {
+            let is_entity = annos
+                .iter()
+                .any(|(a, _)| rule.entity_annotations.iter().any(|w| w == a));
+            let table = annos
+                .iter()
+                .find(|(a, _)| rule.table_annotations.iter().any(|w| w == a))
+                .and_then(|(_, args)| args.as_deref())
+                .and_then(path_from_args);
+            if is_entity || table.is_some() {
+                facts.entities.push(EntityFact {
+                    name: name.clone(),
+                    table,
+                    span: span_of(node),
+                });
+                break;
+            }
+        }
+
         if let Some(stereotype) = &stereotype {
             facts.beans.push(BeanFact {
                 name: name.clone(),
@@ -274,6 +316,30 @@ fn walk_java(
     }
 
     if node.kind() == "method_declaration" {
+        // MyBatis 어노테이션 매퍼 — @Select("SELECT ... FROM orders")
+        let method_name = node
+            .child_by_field_name("name")
+            .map(|n| text(n, src).to_string())
+            .unwrap_or_default();
+        for (anno, args) in annotations_of(node, src) {
+            let is_sql = rules
+                .persistence_rules(lang)
+                .iter()
+                .any(|r| r.sql_annotations.iter().any(|w| *w == anno));
+            if !is_sql {
+                continue;
+            }
+            let Some(args) = args else { continue };
+            for (table, verb) in tables_in_sql(&args) {
+                facts.table_refs.push(TableRefFact {
+                    owner: method_name.clone(),
+                    table,
+                    verb,
+                    span: span_of(node),
+                });
+            }
+        }
+
         let handler = node
             .child_by_field_name("name")
             .map(|n| text(n, src).to_string())
@@ -369,6 +435,58 @@ fn collect_java_injections(
             _ => {}
         }
     }
+}
+
+/// SQL 문자열에서 테이블 이름을 뽑는다.
+///
+/// 파서를 붙이지 않는다 — MyBatis XML과 어노테이션에 들어가는 SQL은 `#{param}`,
+/// `<if>` 같은 템플릿 조각이 섞여 있어 정식 파싱이 자주 실패한다.
+/// FROM/JOIN/INTO/UPDATE 뒤의 식별자만 집는 편이 견고하다.
+pub fn tables_in_sql(sql: &str) -> Vec<(String, String)> {
+    const KEYWORDS: &[(&str, &str)] = &[
+        ("from", "select"),
+        ("join", "select"),
+        ("into", "insert"),
+        ("update", "update"),
+        ("delete from", "delete"),
+    ];
+    let lower = sql.to_lowercase();
+    let mut out: Vec<(String, String)> = Vec::new();
+
+    for (kw, verb) in KEYWORDS {
+        let mut from = 0usize;
+        while let Some(pos) = lower[from..].find(kw) {
+            let start = from + pos;
+            let after = start + kw.len();
+            from = after;
+            // 단어 경계 확인 — `fromage` 같은 오탐 방지
+            let before_ok = start == 0 || !lower.as_bytes()[start - 1].is_ascii_alphanumeric();
+            if !before_ok || after >= lower.len() {
+                continue;
+            }
+            let rest = &sql[after..];
+            let ident: String = rest
+                .trim_start()
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '.')
+                .collect();
+            // 스키마 접두(`dbo.orders`)는 마지막 조각만 쓴다.
+            let table = ident.rsplit('.').next().unwrap_or("").to_string();
+            if table.len() < 2 || table.chars().next().is_some_and(|c| c.is_numeric()) {
+                continue;
+            }
+            // SQL 예약어가 잡히는 경우 제외
+            const RESERVED: &[&str] = &["select", "where", "set", "values", "and", "or", "on"];
+            if RESERVED.contains(&table.to_lowercase().as_str()) {
+                continue;
+            }
+            let entry = (table, verb.to_string());
+            if !out.contains(&entry) {
+                out.push(entry);
+            }
+        }
+    }
+    out
 }
 
 // ─────────────────────────── TypeScript / React ───────────────────────────
@@ -662,5 +780,68 @@ export function useArticle(slug) {
         assert!(pairs.contains(&("POST".into(), "/api/articles".into())), "{pairs:?}");
         // useState("")·map()은 HTTP 호출이 아니다.
         assert_eq!(pairs.len(), 3, "오탐: {pairs:?}");
+    }
+}
+
+#[cfg(test)]
+mod persistence_tests {
+    use super::*;
+    use tree_sitter::Parser;
+
+    fn java(src: &str) -> FrameworkFacts {
+        let mut p = Parser::new();
+        p.set_language(&tree_sitter_java::LANGUAGE.into()).unwrap();
+        let tree = p.parse(src, None).unwrap();
+        let rules = FrameworkRules::effective(&FrameworkRules::default());
+        extract_annotated(tree.root_node(), src.as_bytes(), "java", &rules)
+    }
+
+    #[test]
+    fn sql_table_extraction_handles_mybatis_templates() {
+        // MyBatis SQL은 #{param}·<if> 조각이 섞여 정식 파싱이 자주 실패한다.
+        let t = tables_in_sql("SELECT * FROM orders o JOIN order_items i ON o.id = i.order_id WHERE o.id = #{id}");
+        let names: Vec<&str> = t.iter().map(|(n, _)| n.as_str()).collect();
+        assert!(names.contains(&"orders"), "{t:?}");
+        assert!(names.contains(&"order_items"), "{t:?}");
+
+        let ins = tables_in_sql("INSERT INTO payments (id, amount) VALUES (#{id}, #{amt})");
+        assert_eq!(ins, vec![("payments".to_string(), "insert".to_string())]);
+
+        let upd = tables_in_sql("UPDATE dbo.customers SET name = #{name}");
+        assert_eq!(upd[0].0, "customers", "스키마 접두는 벗긴다");
+
+        // 예약어·짧은 토큰은 잡지 않는다.
+        assert!(tables_in_sql("SELECT 1").is_empty());
+    }
+
+    #[test]
+    fn jpa_entity_and_table() {
+        let f = java(r#"
+@Entity
+@Table(name = "orders")
+public class Order {
+    private Long id;
+}
+"#);
+        assert_eq!(f.entities.len(), 1);
+        assert_eq!(f.entities[0].name, "Order");
+        assert_eq!(f.entities[0].table.as_deref(), Some("orders"));
+    }
+
+    #[test]
+    fn mybatis_annotation_mapper() {
+        let f = java(r#"
+@Mapper
+public interface OrderMapper {
+    @Select("SELECT * FROM orders WHERE id = #{id}")
+    Order findById(Long id);
+
+    @Insert("INSERT INTO orders (name) VALUES (#{name})")
+    void save(Order order);
+}
+"#);
+        // 인터페이스 메서드는 method_declaration 이 아닐 수 있으므로 테이블 참조로 확인한다.
+        let tables: Vec<&str> = f.table_refs.iter().map(|t| t.table.as_str()).collect();
+        assert!(tables.contains(&"orders"), "MyBatis 매퍼에서 테이블을 못 찾음: {:?}", f.table_refs);
     }
 }
