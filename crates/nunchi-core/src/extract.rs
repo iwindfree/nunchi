@@ -24,6 +24,10 @@ pub struct FileFacts {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SymbolFact {
     pub name: String,
+    /// C# `partial class` 처럼 한 타입이 여러 파일로 갈리는 경우 true.
+    /// 인덱서가 파일별 노드를 만들지 않고 하나로 합치는 근거가 된다.
+    #[serde(default)]
+    pub partial: bool,
     /// `function`, `class`, `method` 등 — 쿼리의 `@def.<kind>` 캡처에서 온다
     pub kind: String,
     pub span: Span,
@@ -42,6 +46,8 @@ pub enum SupportedLang {
     Java,
     TypeScript,
     Rust,
+    Python,
+    CSharp,
 }
 
 impl SupportedLang {
@@ -50,6 +56,8 @@ impl SupportedLang {
             "java" => Some(Self::Java),
             "typescript" | "javascript" => Some(Self::TypeScript),
             "rust" => Some(Self::Rust),
+            "python" => Some(Self::Python),
+            "csharp" => Some(Self::CSharp),
             _ => None,
         }
     }
@@ -62,6 +70,8 @@ impl SupportedLang {
         match self {
             Self::Java => tree_sitter_java::LANGUAGE.into(),
             Self::Rust => tree_sitter_rust::LANGUAGE.into(),
+            Self::Python => tree_sitter_python::LANGUAGE.into(),
+            Self::CSharp => tree_sitter_c_sharp::LANGUAGE.into(),
             Self::TypeScript => {
                 let is_tsx = path
                     .extension()
@@ -81,6 +91,8 @@ impl SupportedLang {
             Self::Java => include_str!("../queries/java.scm"),
             Self::TypeScript => include_str!("../queries/typescript.scm"),
             Self::Rust => include_str!("../queries/rust.scm"),
+            Self::Python => include_str!("../queries/python.scm"),
+            Self::CSharp => include_str!("../queries/csharp.scm"),
         }
     }
 }
@@ -135,8 +147,11 @@ pub fn extract(lang: SupportedLang, path: &Path, source: &str) -> Result<FileFac
         }
 
         if let (Some((node, kind)), Some(name)) = (def_node, name) {
+            let partial = matches!(lang, SupportedLang::CSharp)
+                && def_text(node, bytes).starts_with("partial ");
             facts.symbols.push(SymbolFact {
                 name,
+                partial,
                 kind: kind.to_string(),
                 span: Span {
                     start_line: node.start_position().row as u32 + 1,
@@ -149,6 +164,24 @@ pub fn extract(lang: SupportedLang, path: &Path, source: &str) -> Result<FileFac
     }
 
     Ok(facts)
+}
+
+/// 선언 첫 줄에서 수식어를 확인하기 위한 원문.
+fn def_text<'a>(node: Node, bytes: &'a [u8]) -> String {
+    node.utf8_text(bytes)
+        .unwrap_or_default()
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .trim_start_matches("public ")
+        .trim_start_matches("internal ")
+        .trim_start_matches("private ")
+        .trim_start_matches("protected ")
+        .trim_start_matches("sealed ")
+        .trim_start_matches("static ")
+        .trim_start_matches("abstract ")
+        .to_string()
 }
 
 /// 시그니처 대용 — 정의의 첫 줄. 팩 렌더링 L0/L1 티어에서 쓴다(PLAN.md 3절).
@@ -189,7 +222,13 @@ mod tests {
     /// 쿼리에 잘못된 노드 타입이 있으면 런타임에야 터진다. 여기서 먼저 잡는다.
     #[test]
     fn all_queries_compile() {
-        for lang in [SupportedLang::Java, SupportedLang::TypeScript, SupportedLang::Rust] {
+        for lang in [
+            SupportedLang::Java,
+            SupportedLang::TypeScript,
+            SupportedLang::Rust,
+            SupportedLang::Python,
+            SupportedLang::CSharp,
+        ] {
             let language = lang.language(Path::new("x.rs"));
             Query::new(&language, lang.query_source())
                 .unwrap_or_else(|e| panic!("{lang:?} 쿼리 컴파일 실패: {e}"));
@@ -264,6 +303,80 @@ interface OrderDto { id: string }
         assert!(names.contains(&"OrderDto"), "got {names:?}");
         assert!(f.calls.iter().any(|c| c.callee == "fetch"));
         assert!(f.imports.iter().any(|i| i == "react"), "got {:?}", f.imports);
+        Ok(())
+    }
+
+    #[test]
+    fn extracts_python_symbols() -> Result<()> {
+        let src = r#"
+from fastapi import APIRouter
+from .service import OrderService
+
+router = APIRouter()
+
+class OrderController:
+    """주문 컨트롤러."""
+    def get_order(self, order_id: int):
+        return self.service.find_one(order_id)
+
+def list_orders():
+    return fetch_all()
+"#;
+        let f = extract(SupportedLang::Python, Path::new("api.py"), src)?;
+        let names: Vec<_> = f.symbols.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"OrderController"), "got {names:?}");
+        assert!(names.contains(&"get_order"), "got {names:?}");
+        assert!(names.contains(&"list_orders"), "got {names:?}");
+        assert!(f.calls.iter().any(|c| c.callee == "find_one"), "{:?}", f.calls);
+        assert!(f.imports.iter().any(|i| i.contains("fastapi")), "{:?}", f.imports);
+        Ok(())
+    }
+
+    #[test]
+    fn extracts_csharp_symbols() -> Result<()> {
+        let src = r#"
+using System.Windows.Forms;
+using MyApp.Services;
+
+namespace MyApp
+{
+    public partial class OrderForm : Form
+    {
+        private readonly OrderService _service;
+
+        private void btnSave_Click(object sender, EventArgs e)
+        {
+            _service.Save(BuildOrder());
+        }
+    }
+}
+"#;
+        let f = extract(SupportedLang::CSharp, Path::new("OrderForm.cs"), src)?;
+        let names: Vec<_> = f.symbols.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"OrderForm"), "got {names:?}");
+        assert!(names.contains(&"btnSave_Click"), "got {names:?}");
+        assert!(f.calls.iter().any(|c| c.callee == "Save"), "{:?}", f.calls);
+        assert!(
+            f.imports.iter().any(|i| i.contains("Windows.Forms")),
+            "{:?}",
+            f.imports
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn csharp_partial_classes_are_flagged() -> Result<()> {
+        // Designer 파일과 본체가 같은 타입이므로 하나로 합쳐져야 한다.
+        let body = "public partial class OrderForm : Form { void A() {} }";
+        let designer = "partial class OrderForm { private Button btnSave; }";
+        for src in [body, designer] {
+            let f = extract(SupportedLang::CSharp, Path::new("OrderForm.cs"), src)?;
+            let form = f.symbols.iter().find(|s| s.name == "OrderForm").unwrap();
+            assert!(form.partial, "partial로 인식돼야 한다: {src}");
+        }
+        // partial이 아닌 클래스는 영향받지 않는다.
+        let plain = extract(SupportedLang::CSharp, Path::new("X.cs"), "public class Plain {}")?;
+        assert!(!plain.symbols.iter().find(|s| s.name == "Plain").unwrap().partial);
         Ok(())
     }
 

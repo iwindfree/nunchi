@@ -12,7 +12,7 @@ use std::collections::{HashSet, VecDeque};
 use std::path::Path;
 
 /// 스키마 버전. 올리면 인덱스를 자동 전체 재빌드한다(PLAN.md 3.6절).
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS nodes (
     doc           TEXT,
     lang          TEXT,
     content_hash  TEXT,
+    mtime         INTEGER,
     attrs         TEXT NOT NULL DEFAULT 'null'
 );
 CREATE INDEX IF NOT EXISTS nodes_key  ON nodes(key);
@@ -146,7 +147,7 @@ impl SqliteStore {
         Ok(self
             .conn
             .query_row(
-                "SELECT id, kind, name, repo, path, start_line, end_line, signature, doc, lang, content_hash, attrs
+                "SELECT id, kind, name, repo, path, start_line, end_line, signature, doc, lang, content_hash, attrs, mtime
                  FROM nodes WHERE id = ?1",
                 params![id.as_str()],
                 row_to_node,
@@ -167,15 +168,17 @@ impl SqliteStore {
             .flatten())
     }
 
-    /// 종류만 싸게 조회 — 랭킹 루프에서 전체 노드를 로드하지 않기 위해서다.
-    pub fn node_kind(&self, id: &NodeId) -> Result<Option<NodeKind>> {
-        Ok(self
+    /// 랭킹 루프용 — 전체 노드를 로드하지 않고 필요한 두 값만 읽는다.
+    pub fn node_kind_and_mtime(&self, id: &NodeId) -> Result<Option<(NodeKind, Option<i64>)>> {
+        let row: Option<(String, Option<i64>)> = self
             .conn
-            .query_row("SELECT kind FROM nodes WHERE id = ?1", params![id.as_str()], |r| {
-                r.get::<_, String>(0)
-            })
-            .optional()?
-            .and_then(|k| NodeKind::parse(&k)))
+            .query_row(
+                "SELECT kind, mtime FROM nodes WHERE id = ?1",
+                params![id.as_str()],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        Ok(row.and_then(|(k, m)| NodeKind::parse(&k).map(|k| (k, m))))
     }
 
     pub fn count_nodes(&self) -> Result<i64> {
@@ -210,15 +213,6 @@ impl SqliteStore {
             .prepare("SELECT src, dst, kind, confidence * weight FROM edges")?;
         let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
-    }
-
-    /// 파일 노드의 최근 변경 시각(Unix). 랭킹의 recency 항에 쓴다.
-    pub fn set_recency(&mut self, id: &NodeId, epoch: i64) -> Result<()> {
-        self.conn.execute(
-            "UPDATE nodes SET attrs = json_set(COALESCE(NULLIF(attrs,'null'),'{}'), '$.mtime', ?2) WHERE id = ?1",
-            params![id.as_str(), epoch],
-        )?;
-        Ok(())
     }
 
     /// 이번 인덱싱에서 발견되지 않은 파일의 노드를 지운다.
@@ -396,6 +390,7 @@ fn row_to_node(row: &Row<'_>) -> rusqlite::Result<Node> {
     let start: Option<u32> = row.get(5)?;
     let end: Option<u32> = row.get(6)?;
     let attrs: String = row.get(11)?;
+    let mtime: Option<i64> = row.get(12).ok().flatten();
     Ok(Node {
         id: NodeId(row.get(0)?),
         kind: NodeKind::parse(&row.get::<_, String>(1)?).unwrap_or(NodeKind::Symbol),
@@ -410,6 +405,7 @@ fn row_to_node(row: &Row<'_>) -> rusqlite::Result<Node> {
         doc: row.get(8)?,
         lang: row.get(9)?,
         content_hash: row.get(10)?,
+        mtime,
         attrs: serde_json::from_str(&attrs).unwrap_or(serde_json::Value::Null),
     })
 }
@@ -428,13 +424,14 @@ impl Store for SqliteStore {
         {
             let mut ins = tx.prepare(
                 "INSERT INTO nodes (id, key, kind, name, repo, path, start_line, end_line,
-                                    signature, doc, lang, content_hash, attrs)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)
+                                    signature, doc, lang, content_hash, attrs, mtime)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)
                  ON CONFLICT(id) DO UPDATE SET
                     kind=excluded.kind, name=excluded.name, repo=excluded.repo,
                     path=excluded.path, start_line=excluded.start_line, end_line=excluded.end_line,
                     signature=excluded.signature, doc=excluded.doc, lang=excluded.lang,
-                    content_hash=excluded.content_hash, attrs=excluded.attrs",
+                    content_hash=excluded.content_hash, attrs=excluded.attrs,
+                    mtime=excluded.mtime",
             )?;
             let mut del_fts = tx.prepare("DELETE FROM nodes_fts WHERE id = ?1")?;
             let mut ins_fts = tx.prepare(
@@ -458,6 +455,7 @@ impl Store for SqliteStore {
                     n.lang,
                     n.content_hash,
                     serde_json::to_string(&n.attrs)?,
+                    n.mtime,
                 ])?;
                 del_fts.execute(params![n.id.as_str()])?;
                 ins_fts.execute(params![
@@ -541,7 +539,7 @@ impl Store for SqliteStore {
         }
         let mut stmt = self.conn.prepare(
             "SELECT n.id, n.kind, n.name, n.repo, n.path, n.start_line, n.end_line,
-                    n.signature, n.doc, n.lang, n.content_hash, n.attrs,
+                    n.signature, n.doc, n.lang, n.content_hash, n.attrs, n.mtime,
                     -- 컬럼 가중치: name > signature > doc > path.
                     -- 경로에는 디렉터리 이름이 잔뜩 들어 있어 가중치를 주면
                     -- 파일 노드가 상위를 점령한다(실측에서 확인).
@@ -553,7 +551,7 @@ impl Store for SqliteStore {
              LIMIT ?2",
         )?;
         let rows = stmt.query_map(params![fts_query(query), limit as i64], |row| {
-            let score: f64 = row.get(12)?;
+            let score: f64 = row.get(13)?;
             Ok(SearchHit {
                 node: row_to_node(row)?,
                 // bm25()는 관련성이 높을수록 더 음수다. 부호를 뒤집어 직관적으로 만든다.

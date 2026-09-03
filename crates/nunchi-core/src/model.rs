@@ -19,6 +19,14 @@ impl NodeId {
     pub fn symbol(repo: &str, path: &str, symbol: &str) -> Self {
         NodeId(format!("sym:{repo}/{path}#{symbol}"))
     }
+    /// 파일 경로를 포함하지 않는 심볼 ID.
+    ///
+    /// C# `partial class` 는 한 타입이 여러 파일에 흩어진다
+    /// (`OrderForm.cs` + `OrderForm.Designer.cs`). 경로를 ID에 넣으면 같은 타입이
+    /// 두 노드로 갈라지므로, partial 선언은 경로 없이 식별한다.
+    pub fn partial_symbol(repo: &str, symbol: &str) -> Self {
+        NodeId(format!("sym:{repo}#{symbol}"))
+    }
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -125,6 +133,8 @@ pub struct Node {
     pub lang: Option<String>,
     /// 워킹트리 파일 내용 해시. git blob SHA가 아니다 — CRLF 차이 때문(PLAN.md 3.10절).
     pub content_hash: Option<String>,
+    /// 소스 파일의 최종 수정 시각(Unix 초). 랭킹의 recency 항이 쓴다.
+    pub mtime: Option<i64>,
     pub attrs: serde_json::Value,
 }
 
@@ -141,6 +151,7 @@ impl Node {
             doc: None,
             lang: None,
             content_hash: None,
+            mtime: None,
             attrs: serde_json::Value::Null,
         }
     }

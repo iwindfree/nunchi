@@ -206,6 +206,12 @@ pub fn build_pack(
     // 시드가 속한 파일과 함께 바뀌어온 파일에 점수를 준다.
     let cochange = cochange_scores(graph, &seed_idx);
 
+    // 최근성 — 지금 손대고 있는 코드가 대개 지금의 관심사다.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+
     // ── 3~4. 후보 수집 + 랭킹 ──
     let w = &opts.weights;
     let mut scored: Vec<(usize, f32, HashMap<&'static str, f32>)> = Vec::new();
@@ -216,14 +222,16 @@ pub fn build_pack(
         if p < 1e-4 && b == 0.0 {
             continue;
         }
-        let Some(kind) = store.node_kind(id)? else { continue };
+        let Some((kind, mtime)) = store.node_kind_and_mtime(id)? else { continue };
         let prior = kind_prior(kind);
         let c = central[i];
         let cc = cochange.get(&i).copied().unwrap_or(0.0);
+        let rc = recency_score(mtime, now);
         let score = (w.alpha_bm25 * b
             + w.beta_ppr * p
             + w.epsilon_central * c
-            + w.delta_cochange * cc)
+            + w.delta_cochange * cc
+            + w.gamma_recency * rc)
             * prior;
         let mut why = HashMap::new();
         if b > 0.0 {
@@ -233,6 +241,9 @@ pub fn build_pack(
         why.insert("prior", prior);
         if cc > 0.0 {
             why.insert("cochange", (cc * 100.0).round() / 100.0);
+        }
+        if rc > 0.0 {
+            why.insert("recency", (rc * 100.0).round() / 100.0);
         }
         scored.push((i, score, why));
     }
@@ -319,6 +330,17 @@ pub fn build_pack(
         stale,
         hint: None,
     })
+}
+
+/// 최근성 점수(0~1). 반감기 30일로 지수 감쇠한다.
+///
+/// 오늘 고친 파일이 1.0, 30일 전이 0.5, 1년 전이 거의 0이다. 선형 감쇠는
+/// 오래된 코드를 과하게 벌주고, 계단 함수는 경계에서 튄다.
+fn recency_score(mtime: Option<i64>, now: i64) -> f32 {
+    const HALF_LIFE_DAYS: f32 = 30.0;
+    let Some(mtime) = mtime else { return 0.0 };
+    let age_days = ((now - mtime).max(0) as f32) / 86_400.0;
+    0.5f32.powf(age_days / HALF_LIFE_DAYS)
 }
 
 /// 시드와 함께 바뀌어온 파일의 점수(0~1). 심볼은 소속 파일의 점수를 물려받는다.
@@ -566,6 +588,19 @@ mod tests {
         assert_eq!(Tier::L2.lower(), Some(Tier::L1));
         assert_eq!(Tier::L1.lower(), Some(Tier::L0));
         assert_eq!(Tier::L0.lower(), None);
+    }
+
+    #[test]
+    fn recency_decays_with_half_life() {
+        let now = 1_000_000_000i64;
+        let day = 86_400i64;
+        assert!((recency_score(Some(now), now) - 1.0).abs() < 0.01, "오늘 = 1.0");
+        assert!((recency_score(Some(now - 30 * day), now) - 0.5).abs() < 0.01, "30일 = 0.5");
+        assert!(recency_score(Some(now - 365 * day), now) < 0.01, "1년 전 ≈ 0");
+        // mtime을 모르는 노드는 감점도 가점도 없다.
+        assert_eq!(recency_score(None, now), 0.0);
+        // 미래 시각(시계 어긋남)에도 1.0을 넘지 않는다.
+        assert!(recency_score(Some(now + 10 * day), now) <= 1.0);
     }
 
     #[test]

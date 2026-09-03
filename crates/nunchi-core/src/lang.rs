@@ -11,6 +11,7 @@ pub fn detect(path: &Path) -> Option<&'static str> {
         "ts" | "tsx" | "mts" | "cts" => "typescript",
         "js" | "jsx" | "mjs" | "cjs" => "javascript",
         "rs" => "rust",
+        "py" | "pyi" => "python",
         "cs" => "csharp",
         "sql" => "sql",
         "md" | "mdx" => "markdown",
@@ -29,6 +30,6 @@ pub fn detect(path: &Path) -> Option<&'static str> {
 pub fn is_code(lang: &str) -> bool {
     matches!(
         lang,
-        "java" | "kotlin" | "typescript" | "javascript" | "rust" | "csharp"
+        "java" | "kotlin" | "typescript" | "javascript" | "rust" | "csharp" | "python"
     )
 }

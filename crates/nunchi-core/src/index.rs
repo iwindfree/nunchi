@@ -433,6 +433,13 @@ fn scan_repo(
         file_node.lang = Some(language.to_string());
         file_node.content_hash = Some(npath::content_hash(&bytes));
         file_node.span = Some(Span { start_line: 1, end_line: line_count });
+        // 랭킹의 recency 항이 쓴다. 최근 바뀐 코드가 대개 지금 관심사다.
+        let file_mtime = meta
+            .modified()
+            .ok()
+            .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64);
+        file_node.mtime = file_mtime;
         nodes.push(file_node);
         edges.push(Edge::new(
             repo_id.clone(),
@@ -499,13 +506,19 @@ fn scan_repo(
 
         let mut symbol_spans = Vec::new();
         for sym in &facts.symbols {
-            let sym_id = NodeId::symbol(repo, &rel, &sym.name);
+            // partial 타입은 파일이 달라도 같은 노드여야 한다 (C# WinForms Designer).
+            let sym_id = if sym.partial {
+                NodeId::partial_symbol(repo, &sym.name)
+            } else {
+                NodeId::symbol(repo, &rel, &sym.name)
+            };
             let mut node = Node::new(sym_id.clone(), NodeKind::Symbol, &sym.name, repo);
             node.path = Some(rel.clone());
             node.span = Some(sym.span);
             node.signature = sym.signature.clone();
             node.doc = sym.doc.clone();
             node.lang = Some(language.to_string());
+            node.mtime = file_mtime;
             node.attrs = match stereotypes.get(sym.name.as_str()) {
                 Some(stereotype) => serde_json::json!({
                     "symbol_kind": sym.kind,
