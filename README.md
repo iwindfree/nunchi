@@ -36,6 +36,7 @@ cargo build --release
 | `nunchi serve` | ✅ MCP 서버 (rmcp 3.2) — 툴 5개 |
 | `nunchi tui` | ✅ 탐색·영향범위·인덱스·팩 미리보기·지표 |
 | `nunchi rules [--toml]` | ✅ 프레임워크 규칙 확인·복사 |
+| `nunchi bench [--tasks f]` | ✅ grounded vs ungrounded 토큰·recall 실측 |
 | `nunchi index --watch` | ✅ 파일 워처 + 증분 재인덱싱 |
 
 ## 구조
@@ -44,8 +45,11 @@ cargo build --release
 crates/
 ├── nunchi-core/          라이브러리 — 모든 로직
 │   ├── model.rs          노드 18종 / 엣지 19종
-│   ├── extract.rs        tree-sitter 심볼 추출
-│   ├── framework.rs      Spring 어노테이션 / React API 호출
+│   ├── extract.rs        tree-sitter 심볼 추출 (5개 언어)
+│   ├── framework.rs      Spring·FastAPI·Flask·ASP.NET·React·JPA·MyBatis
+│   ├── mapper_xml.rs     MyBatis XML 매퍼
+│   ├── history.rs        git 이력 → 동시변경
+│   ├── bench.rs          벤치 하네스
 │   ├── resolve.rs        이름 기반 참조 해소
 │   ├── graph.rs          메모리 그래프 + PPR
 │   ├── pack.rs           랭킹 + 토큰 예산 렌더링

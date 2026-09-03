@@ -40,15 +40,29 @@ name = "web"
 repos = ["/Users/me/dev/order-api", "/Users/me/dev/order-web"]
 
 [index]
-languages = ["java", "typescript"]
+languages = ["java", "typescript"]     # java · typescript · javascript · python · csharp · rust
 exclude = ["**/node_modules/**", "**/build/**", "**/target/**", ...]
 max_file_bytes = 2097152
 max_commits = 1000          # git 이력을 읽을 커밋 수. 0이면 생략
 
-[rank]                       # 재컴파일 없이 조정. TUI에서 실시간으로 만질 수 있음
+```
+
+`init`은 파일을 **두 개** 만듭니다.
+
+| 파일 | 내용 | 커밋? |
+|---|---|---|
+| `nunchi.toml` | 저장소 **절대 경로** — 머신마다 다름 | ❌ gitignore |
+| `nunchi.shared.toml` | 랭킹 가중치 · 프레임워크 규칙 · 용어 사전 · 제외 패턴 | ✅ **커밋** |
+
+공용 파일이 머신 로컬 값을 덮어씁니다. 회사 장비와 개인 장비가 **같은 가중치와
+같은 규칙**을 쓰게 하려면 `nunchi.shared.toml`을 커밋하세요.
+
+```toml
+# nunchi.shared.toml — 경로가 들어가지 않는다
+[rank]
 alpha_bm25 = 0.7
 beta_ppr = 0.5
-gamma_recency = 0.3
+gamma_recency = 0.3      # 반감기 30일 지수 감쇠
 delta_cochange = 0.4
 epsilon_central = 0.2
 ```
@@ -163,8 +177,36 @@ L0        63  getBySlug                    .../ArticleController.java:73-84
 nunchi find "OrderService" --limit 10      # 전문 검색
 nunchi rules                               # 적용 중인 프레임워크 규칙
 nunchi rules --toml                        # 그대로 복사해 확장
+nunchi bench                               # 절감·recall 실측
 nunchi tui                                 # 대화형 탐색·튜닝
 ```
+
+### `nunchi bench` — 절감을 수치로
+
+`bench/tasks.jsonl`에 실제 태스크를 한 줄에 하나씩 적습니다.
+
+```jsonl
+{"task":"댓글 삭제 로직 수정","expect":["CommentController.java","CommentService.java"]}
+{"task":"주문 재시도","expect":["OrderService.java"]}
+```
+
+`expect`는 이 태스크를 풀려면 **반드시 봐야 하는 좌표**입니다(부분 경로 일치).
+
+```
+task                          grounded ungrounded    절감  recall
+댓글 삭제 로직 수정                 2934       9593    69%    100%
+게시글 조회                       3971      14889    73%    100%
+사용자 인증 로그인                  3960       3462   -14%    100%
+평균                            3647       9613    53%    100%
+```
+
+**두 가지를 함께 보세요.** 토큰만 줄고 `recall`이 떨어지면 무의미합니다.
+그리고 절감이 음수인 태스크는 정상입니다 — 관련 코드가 적고 이름이 뚜렷하면
+grep이 정확히 착지해서 그래프가 이기지 못합니다.
+
+> `ungrounded`는 **대리 지표**입니다. 실제 에이전트 세션이 아니라
+> "질의어가 걸리는 파일을 통째로 읽었을 때"를 계산합니다.
+> 상대 비교에는 유효하지만 절대 절감률로 인용하지 마세요.
 
 ---
 
@@ -225,6 +267,27 @@ method = "POST"
 [[framework.bean]]
 lang = "java"
 annotations = ["OurService", "OurComponent"]
+```
+
+### 사내 ORM · 매퍼
+
+```toml
+[[framework.persistence]]
+lang = "java"
+entity_annotations = ["OurEntity"]
+table_annotations = ["OurTable"]
+sql_annotations = ["OurQuery"]              # 어노테이션 안의 SQL에서 테이블을 뽑음
+repository_supertypes = ["OurBaseRepository"]
+```
+
+### 파이썬 라우트 (사내 프레임워크)
+
+```toml
+[[framework.route]]
+lang = "python"
+annotation = "handler"                       # @our_app.handler("/x")
+method = "POST"
+receivers = ["our_app", "svc"]               # 이 수신자에서만 라우트로 본다
 ```
 
 ### 도메인 용어 사전

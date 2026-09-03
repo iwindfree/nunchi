@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 pub const CONFIG_FILE: &str = "nunchi.toml";
+/// 저장소에 커밋하는 공용 설정. 경로가 없으므로 머신이 달라도 그대로 쓴다.
+pub const SHARED_FILE: &str = "nunchi.shared.toml";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -99,12 +101,96 @@ impl Default for RankWeights {
     }
 }
 
+/// 저장소에 커밋하는 부분 — 경로가 들어가지 않는다.
+///
+/// 랭킹 가중치와 프레임워크 규칙은 **양쪽 머신이 같은 값을 써야 한다**
+/// (PLAN.md 3.10절). 반면 저장소 경로는 머신마다 다르다. 한 파일에 섞여 있으면
+/// 통째로 gitignore할 수밖에 없어 가중치 공유가 불가능해진다.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SharedConfig {
+    #[serde(default)]
+    pub index: Option<SharedIndex>,
+    #[serde(default)]
+    pub rank: Option<RankWeights>,
+    #[serde(default)]
+    pub framework: Option<crate::rules::FrameworkRules>,
+    #[serde(default)]
+    pub semantic: Option<crate::semantic::Synonyms>,
+}
+
+/// 공용 인덱싱 설정 — 경로를 담지 않는 항목만.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SharedIndex {
+    #[serde(default)]
+    pub languages: Option<Vec<String>>,
+    #[serde(default)]
+    pub exclude: Option<Vec<String>>,
+    #[serde(default)]
+    pub max_commits: Option<usize>,
+}
+
 impl Config {
     pub fn load(path: &Path) -> Result<Self> {
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("설정 파일을 읽을 수 없습니다: {}", path.display()))?;
-        toml::from_str(&text)
-            .with_context(|| format!("설정 파일 파싱 실패: {}", path.display()))
+        let mut config: Config = toml::from_str(&text)
+            .with_context(|| format!("설정 파일 파싱 실패: {}", path.display()))?;
+
+        // 옆에 공용 설정이 있으면 덮어쓴다. 저장소에 커밋된 값이 기준이 된다.
+        let shared_path = path.with_file_name(SHARED_FILE);
+        if shared_path.is_file() {
+            let shared: SharedConfig = toml::from_str(
+                &std::fs::read_to_string(&shared_path)
+                    .with_context(|| format!("공용 설정을 읽을 수 없습니다: {}", shared_path.display()))?,
+            )
+            .with_context(|| format!("공용 설정 파싱 실패: {}", shared_path.display()))?;
+            config.apply_shared(shared);
+        }
+        Ok(config)
+    }
+
+    fn apply_shared(&mut self, shared: SharedConfig) {
+        if let Some(i) = shared.index {
+            if let Some(v) = i.languages {
+                self.index.languages = v;
+            }
+            if let Some(v) = i.exclude {
+                self.index.exclude = v;
+            }
+            if let Some(v) = i.max_commits {
+                self.index.max_commits = v;
+            }
+        }
+        if let Some(v) = shared.rank {
+            self.rank = v;
+        }
+        if let Some(v) = shared.framework {
+            self.framework = v;
+        }
+        if let Some(v) = shared.semantic {
+            self.semantic = v;
+        }
+    }
+
+    /// 공용으로 뽑아낼 부분만 추린다. TUI의 가중치 저장이 이걸 쓴다.
+    pub fn to_shared(&self) -> SharedConfig {
+        SharedConfig {
+            index: Some(SharedIndex {
+                languages: Some(self.index.languages.clone()),
+                exclude: Some(self.index.exclude.clone()),
+                max_commits: Some(self.index.max_commits),
+            }),
+            rank: Some(self.rank),
+            framework: Some(self.framework.clone()),
+            semantic: Some(self.semantic.clone()),
+        }
+    }
+
+    pub fn save_shared(&self, dir: &Path) -> Result<PathBuf> {
+        let path = dir.join(SHARED_FILE);
+        std::fs::write(&path, toml::to_string_pretty(&self.to_shared())?)
+            .with_context(|| format!("공용 설정을 쓸 수 없습니다: {}", path.display()))?;
+        Ok(path)
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {
@@ -125,5 +211,83 @@ impl Config {
             dir = d.parent();
         }
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tmpdir(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("nunchi-cfg-{name}"));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn shared_overrides_machine_local() -> Result<()> {
+        let dir = tmpdir("shared");
+        std::fs::write(
+            dir.join(CONFIG_FILE),
+            r#"
+[solution]
+name = "web"
+repos = ["/machine/specific/path"]
+
+[rank]
+alpha_bm25 = 0.1
+beta_ppr = 0.1
+gamma_recency = 0.1
+delta_cochange = 0.1
+epsilon_central = 0.1
+"#,
+        )?;
+        std::fs::write(
+            dir.join(SHARED_FILE),
+            r#"
+[rank]
+alpha_bm25 = 0.9
+beta_ppr = 0.8
+gamma_recency = 0.3
+delta_cochange = 0.4
+epsilon_central = 0.2
+
+[semantic.terms]
+"주문" = ["order"]
+"#,
+        )?;
+
+        let c = Config::load(&dir.join(CONFIG_FILE))?;
+        // 경로는 머신 로컬 값이 남고
+        assert_eq!(c.solution.repos[0].to_string_lossy(), "/machine/specific/path");
+        // 가중치·용어는 공용 값이 이긴다
+        assert_eq!(c.rank.alpha_bm25, 0.9);
+        assert!(c.semantic.terms.contains_key("주문"));
+        Ok(())
+    }
+
+    #[test]
+    fn shared_is_optional() -> Result<()> {
+        let dir = tmpdir("nosh");
+        std::fs::write(
+            dir.join(CONFIG_FILE),
+            "[solution]\nname=\"x\"\nrepos=[\"/a\"]\n",
+        )?;
+        let c = Config::load(&dir.join(CONFIG_FILE))?;
+        assert_eq!(c.rank.alpha_bm25, RankWeights::default().alpha_bm25);
+        Ok(())
+    }
+
+    #[test]
+    fn shared_roundtrip_has_no_paths() -> Result<()> {
+        let dir = tmpdir("roundtrip");
+        std::fs::write(dir.join(CONFIG_FILE), "[solution]\nname=\"x\"\nrepos=[\"/secret/path\"]\n")?;
+        let c = Config::load(&dir.join(CONFIG_FILE))?;
+        let path = c.save_shared(&dir)?;
+        let text = std::fs::read_to_string(&path)?;
+        // 공용 파일에 머신 경로가 새어 나가면 안 된다.
+        assert!(!text.contains("/secret/path"), "경로가 공용 설정에 들어갔다:\n{text}");
+        Ok(())
     }
 }

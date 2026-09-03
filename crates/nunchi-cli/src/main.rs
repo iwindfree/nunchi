@@ -202,6 +202,9 @@ fn cmd_init(repos: Vec<PathBuf>, name: Option<String>, force: bool) -> Result<()
         println!("          {}", r.display());
     }
     println!("  언어    {}", if detected.is_empty() { "(감지 실패 — 기본값)".into() } else { detected.join(", ") });
+    // 공용 설정도 함께 만들어 둔다 — 커밋 대상이다.
+    let shared = config.save_shared(&cwd)?;
+    println!("{} 생성 (커밋하세요 — 경로가 없어 머신 간 공유됩니다)", shared.display());
     println!("\n제외 패턴을 확인하세요. 생성 코드가 인덱스에 들어오면 랭킹이 오염됩니다.");
     println!("프레임워크 규칙은 내장 기본값(Spring + React)이 적용됩니다 — `nunchi rules`로 확인.");
     println!("다음: nunchi index");

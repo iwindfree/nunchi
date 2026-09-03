@@ -228,12 +228,27 @@ java 80/80 파싱 · javascript 50/50 파싱
 
 우선순위 순:
 
-1. **JPA 계층** — `Entity`/`Table` 노드와 `PERSISTS_TO` 엣지.
-   `save`·`findByStatus` 미해소가 여기서 해결됩니다
-2. **SCIP 정밀 경로** — `scip-java`, `scip-typescript` 연동.
-   빌드가 필요하므로 커밋/CI/유휴 시에만 돌리는 2단 구조입니다
-3. **파일 단위 증분 갱신** — 현재 워처는 전체 재인덱싱(캐시로 비용은 낮음)
-4. **Phase 0 벤치 하네스** — grounded/ungrounded 대조 실측.
-   실제 솔루션 저장소가 있는 회사 장비에서만 의미 있는 수치가 나옵니다
-5. **C# / WinForms** (v2) — partial 클래스 병합, Designer 이벤트 배선,
-   SQL 리터럴 → Table
+1. **SCIP 정밀 경로** — `scip-java`, `scip-typescript` 연동. 빌드가 필요하므로
+   커밋/CI/유휴 시에만 돌리는 2단 구조다. 현재는 tree-sitter 이름 기반 휴리스틱뿐
+2. **JPA 파생 쿼리** — `findByStatusAndCreatedAtAfter` 같은 메서드 이름을
+   해석해 Entity 필드로 잇기
+3. **호출 기반 라우팅** — Django `path(...)`, Express `app.get(path, handler)`.
+   규칙 모델에 축을 하나 더 늘려야 한다
+4. **파일 단위 증분 갱신** — 워처가 아직 전체 재인덱싱(캐시로 비용은 낮음)
+5. **WinForms 심화** — Designer 이벤트 배선(`btnSave.Click += ...`) → HANDLES,
+   `.resx` 리소스. partial 병합은 완료
+6. **Windows 실측** — 긴 경로·워처 폭풍·WAL. 회사 장비에서만 가능
+7. **Doc/Contract 노드** — 문서 연결, DTO 계약 기반 교차 저장소 엣지
+
+### 현재 지원 범위
+
+| 언어 | 심볼 | 라우트 | DI | 영속 |
+|---|---|---|---|---|
+| Java | ✅ | Spring | ✅ | JPA · MyBatis(어노테이션·XML) |
+| TypeScript/JS | ✅ | react-router(부분) | — | — |
+| Python | ✅ | FastAPI · Flask | — | SQLAlchemy |
+| C# | ✅ (partial 병합) | ASP.NET | — | — |
+| Rust | ✅ | — | — | — |
+
+HTTP 클라이언트(`CALLS_API`의 프런트 끝): fetch·axios(TS/JS), requests·httpx(Python),
+HttpClient(C#).

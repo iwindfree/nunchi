@@ -219,11 +219,21 @@ impl App {
     }
 
     fn save_weights(&mut self) {
-        match self.config.save(&self.config_path) {
-            Ok(()) => {
+        // 가중치는 **공용 파일**로 저장한다. 저장소에 커밋되어 양쪽 머신이
+        // 같은 값을 쓰게 하기 위해서다(PLAN.md 3.10절). 머신별 nunchi.toml에
+        // 넣으면 경로가 섞여 gitignore 대상이 되고 공유가 불가능해진다.
+        let dir = self
+            .config_path
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+            .to_path_buf();
+        match self.config.save_shared(&dir) {
+            Ok(path) => {
                 self.dirty_weights = false;
-                // 저장하면 그 순간부터 에이전트도 같은 가중치를 쓴다.
-                self.status = format!("{} 에 저장 — 에이전트도 이 값을 씁니다", self.config_path.display());
+                self.status = format!(
+                    "{} 에 저장 — 커밋하면 다른 머신·에이전트도 이 값을 씁니다",
+                    path.display()
+                );
             }
             Err(e) => self.status = format!("저장 실패: {e}"),
         }
@@ -357,7 +367,7 @@ fn draw(f: &mut Frame, app: &mut App) {
     }
 
     let hint = match app.screen {
-        Screen::Pack => "[←→] 가중치 · [↑↓] 항목 선택 · [s] nunchi.toml 저장 · [i] 입력 · [tab] 화면 · [q] 종료",
+        Screen::Pack => "[←→] 가중치 · [↑↓] 선택 · [s] 공용설정 저장 · [i] 입력 · [tab] 화면 · [q] 종료",
         _ => "[↑↓] 이동 · [enter] 실행 · [i] 입력 · [tab] 화면 · [q] 종료",
     };
     let dirty = if app.dirty_weights { "  ● 저장 안 됨" } else { "" };
