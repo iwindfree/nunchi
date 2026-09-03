@@ -1,4 +1,4 @@
-//! 컨텍스트 팩 — 토큰 절감의 본체 (PLAN.md 3절·3.5절)
+//! 컨텍스트 팩 — 토큰 절감의 본체 (docs/DESIGN.md 2절·3.5절)
 //!
 //! 에이전트에게 **답이 아니라 좌표**를 준다. 파일 12개 전체(≈35k) 대신
 //! 심볼 40개를 L0/L1/L2 혼합으로 렌더링(≈4k)하고 정확한 `path:line`을 붙인다.
@@ -87,7 +87,7 @@ pub struct Pack {
     pub items: Vec<PackItem>,
     pub related: Related,
     /// 인덱스가 낡아 신뢰할 수 없는 항목. 틀린 좌표를 자신 있게 주는 것보다
-    /// 낡았다고 말하는 편이 항상 낫다 (PLAN.md 3.6절).
+    /// 낡았다고 말하는 편이 항상 낫다 (docs/DESIGN.md 8절).
     pub stale: Vec<String>,
     /// 결과가 비었을 때의 원인 안내. 빈 팩을 말없이 돌려주면 안 된다.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -156,7 +156,7 @@ impl Default for PackOptions {
     }
 }
 
-/// 태스크 문장 하나로 컨텍스트 팩을 만든다. PLAN.md 3.5절의 5단계 파이프라인.
+/// 태스크 문장 하나로 컨텍스트 팩을 만든다. docs/DESIGN.md 2절의 5단계 파이프라인.
 pub fn build_pack(
     store: &SqliteStore,
     graph: &MemGraph,
@@ -300,7 +300,7 @@ pub fn build_pack(
             }
         }
 
-        // 지연 검증 — 인덱스가 낡았으면 좌표를 신뢰할 수 없다 (PLAN.md 3.6절)
+        // 지연 검증 — 인덱스가 낡았으면 좌표를 신뢰할 수 없다 (docs/DESIGN.md 8절)
         let body_source = read_verified(&node, repo_roots);
         if matches!(body_source, Verified::Stale) {
             stale.push(node.reference().unwrap_or_else(|| node.id.0.clone()));
@@ -340,7 +340,7 @@ pub fn build_pack(
         items.push(item);
     }
 
-    // 교차 저장소 연결 — 이 프로젝트의 존재 이유 (PLAN.md 3.9절)
+    // 교차 저장소 연결 — 이 프로젝트의 존재 이유 (docs/DESIGN.md 4·5절)
     let related = collect_related(store, graph, &seed_idx, &items)?;
 
     Ok(Pack {

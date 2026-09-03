@@ -1,7 +1,7 @@
-//! SQLite 저장소 구현 (PLAN.md 2절 결정)
+//! SQLite 저장소 구현 (docs/DESIGN.md 7절 결정)
 //!
 //! WAL 모드를 쓰는 이유는 인덱서(쓰기)와 MCP 서버(읽기)가 별도 프로세스이기 때문이다
-//! (PLAN.md 3.5절). 임베디드 그래프 DB 다수가 갖는 단일 라이터 제약을 여기서 피한다.
+//! (docs/DESIGN.md 2절). 임베디드 그래프 DB 다수가 갖는 단일 라이터 제약을 여기서 피한다.
 
 use super::{RankOpts, Ranked, SearchHit, Store};
 use crate::model::*;
@@ -11,7 +11,7 @@ use rusqlite::{params, Connection, OptionalExtension, Row};
 use std::collections::{HashSet, VecDeque};
 use std::path::Path;
 
-/// 스키마 버전. 올리면 인덱스를 자동 전체 재빌드한다(PLAN.md 3.6절).
+/// 스키마 버전. 올리면 인덱스를 자동 전체 재빌드한다(docs/DESIGN.md 8절).
 pub const SCHEMA_VERSION: i64 = 3;
 
 const SCHEMA: &str = r#"
@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS edges (
 CREATE INDEX IF NOT EXISTS edges_src ON edges(src, kind);
 CREATE INDEX IF NOT EXISTS edges_dst ON edges(dst, kind);
 
--- 저장소별 HEAD. 분리 저장소에서 브랜치 편차를 감지하는 데 쓴다(PLAN.md 3.9절).
+-- 저장소별 HEAD. 분리 저장소에서 브랜치 편차를 감지하는 데 쓴다(docs/DESIGN.md 4·5절).
 CREATE TABLE IF NOT EXISTS repos (
     repo   TEXT PRIMARY KEY,
     root   TEXT NOT NULL,
@@ -93,7 +93,7 @@ impl SqliteStore {
     }
 
     fn init(conn: Connection) -> Result<Self> {
-        // WAL: 쓰기 중에도 읽기가 막히지 않는다 (PLAN.md 3.6절).
+        // WAL: 쓰기 중에도 읽기가 막히지 않는다 (docs/DESIGN.md 8절).
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.execute_batch(SCHEMA)?;
@@ -155,7 +155,7 @@ impl SqliteStore {
             .optional()?)
     }
 
-    /// 파일 노드의 저장된 내용 해시. 지연 검증(PLAN.md 3.6절)에서 쓴다.
+    /// 파일 노드의 저장된 내용 해시. 지연 검증(docs/DESIGN.md 8절)에서 쓴다.
     pub fn file_hash(&self, repo: &str, path: &str) -> Result<Option<String>> {
         Ok(self
             .conn
@@ -189,7 +189,7 @@ impl SqliteStore {
         Ok(self.conn.query_row("SELECT COUNT(*) FROM edges", [], |r| r.get(0))?)
     }
 
-    /// 언어별 파일 수 — `nunchi doctor` 커버리지 표의 원천 (PLAN.md 3.8절).
+    /// 언어별 파일 수 — `nunchi doctor` 커버리지 표의 원천 (docs/GUIDE.md 최초 적용).
     pub fn files_by_lang(&self) -> Result<Vec<(String, i64)>> {
         let mut stmt = self.conn.prepare(
             "SELECT COALESCE(lang, '(unknown)'), COUNT(*) FROM nodes
@@ -199,7 +199,7 @@ impl SqliteStore {
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
-    /// 메모리 그래프 적재용 — 전체 노드 ID (PLAN.md 2절)
+    /// 메모리 그래프 적재용 — 전체 노드 ID (docs/DESIGN.md 7절)
     pub fn all_node_ids(&self) -> Result<Vec<NodeId>> {
         let mut stmt = self.conn.prepare("SELECT id FROM nodes")?;
         let rows = stmt.query_map([], |r| r.get::<_, String>(0).map(NodeId))?;
@@ -563,7 +563,7 @@ impl Store for SqliteStore {
 
     fn rank(&self, _seeds: &[NodeId], _opts: &RankOpts) -> Result<Vec<Ranked>> {
         anyhow::bail!(
-            "rank()는 Phase 2에서 구현합니다 (PLAN.md 4절). \
+            "rank()는 Phase 2에서 구현합니다 (docs/CONTRIBUTING.md 남은 작업). \
              메모리 인접리스트 기반 Personalized PageRank가 필요합니다."
         )
     }

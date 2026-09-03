@@ -1,4 +1,4 @@
-//! 저장 계층 어댑터 (PLAN.md 2절)
+//! 저장 계층 어댑터 (docs/DESIGN.md 7절)
 //!
 //! **이 트레이트가 좁게 유지되는 것이 설계의 핵심이다.** v1은 SQLite로 가지만
 //! 엔진 스파이크 결과에 따라 LadybugDB 등으로 갈아탈 수 있어야 하며,
@@ -53,6 +53,6 @@ pub trait Store {
     fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>>;
 
     /// 시드 기준 랭킹. Personalized PageRank는 메모리 인접리스트에서 계산한다
-    /// (PLAN.md 3.6절 — C 계층을 쓰기 경로에서 제외).
+    /// (docs/DESIGN.md 8절 — C 계층을 쓰기 경로에서 제외).
     fn rank(&self, seeds: &[NodeId], opts: &RankOpts) -> Result<Vec<Ranked>>;
 }

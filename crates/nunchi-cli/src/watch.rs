@@ -1,8 +1,8 @@
-//! 파일 워처 — 증분 재인덱싱 (PLAN.md 3.6절)
+//! 파일 워처 — 증분 재인덱싱 (docs/DESIGN.md 8절)
 //!
 //! **checkout 자체는 거의 공짜여야 한다.** git checkout은 파일 수천 개를 한 번에
 //! 바꾸므로 개별 이벤트로 처리하면 이벤트 폭풍 + 중간 상태 인덱싱으로 무너진다.
-//! debounce로 묶고, 그 사이 또 변경이 오면 목록을 병합한다(PLAN.md 3.7절).
+//! debounce로 묶고, 그 사이 또 변경이 오면 목록을 병합한다(docs/DESIGN.md 9절).
 
 use anyhow::{Context, Result};
 use notify::{Event, EventKind, RecursiveMode, Watcher};

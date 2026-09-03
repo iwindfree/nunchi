@@ -1,4 +1,4 @@
-//! `nunchi.toml` — 솔루션별 설정 (PLAN.md 3.8절)
+//! `nunchi.toml` — 솔루션별 설정 (docs/GUIDE.md 최초 적용)
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -34,7 +34,7 @@ pub struct Solution {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexConfig {
     pub languages: Vec<String>,
-    /// 생성 코드·벤더 디렉터리가 들어오면 랭킹이 오염된다 (PLAN.md 3.8절).
+    /// 생성 코드·벤더 디렉터리가 들어오면 랭킹이 오염된다 (docs/GUIDE.md 최초 적용).
     pub exclude: Vec<String>,
     pub max_file_bytes: u64,
     /// git 이력을 몇 커밋까지 읽을지. 0이면 이력 인덱싱을 건너뛴다.
@@ -78,7 +78,7 @@ pub const DEFAULT_EXCLUDES: &[&str] = &[
     "**/*.lock",
 ];
 
-/// 랭킹 가중치 α~ε. 재컴파일 없이 조정하기 위해 설정으로 분리한다(PLAN.md 1.6절).
+/// 랭킹 가중치 α~ε. 재컴파일 없이 조정하기 위해 설정으로 분리한다(docs/DESIGN.md 11절).
 /// TUI 팩 미리보기에서 실시간으로 만지고 저장한다.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct RankWeights {
@@ -104,7 +104,7 @@ impl Default for RankWeights {
 /// 저장소에 커밋하는 부분 — 경로가 들어가지 않는다.
 ///
 /// 랭킹 가중치와 프레임워크 규칙은 **양쪽 머신이 같은 값을 써야 한다**
-/// (PLAN.md 3.10절). 반면 저장소 경로는 머신마다 다르다. 한 파일에 섞여 있으면
+/// (docs/CONTRIBUTING.md 개발 환경). 반면 저장소 경로는 머신마다 다르다. 한 파일에 섞여 있으면
 /// 통째로 gitignore할 수밖에 없어 가중치 공유가 불가능해진다.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SharedConfig {

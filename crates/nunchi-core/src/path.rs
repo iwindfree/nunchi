@@ -1,4 +1,4 @@
-//! 경로 정규화 — Windows 대응 (PLAN.md 3.10절)
+//! 경로 정규화 — Windows 대응 (docs/CONTRIBUTING.md 개발 환경)
 //!
 //! 회사 컴이 Windows이므로 다음을 흡수해야 한다:
 //! - 역슬래시 구분자 → 노드 ID가 플랫폼마다 달라지면 안 된다
@@ -49,7 +49,7 @@ pub fn to_extended_length(path: &Path) -> PathBuf {
 ///
 /// **git blob SHA를 쓰지 않는다.** `core.autocrlf=true`인 Windows에서는
 /// 워킹트리가 CRLF, blob이 LF라 두 값이 갈린다. 우리가 실제로 파싱하는 것은
-/// 워킹트리 내용이므로 그것을 해시해 자기 일관성을 유지한다(PLAN.md 3.10절).
+/// 워킹트리 내용이므로 그것을 해시해 자기 일관성을 유지한다(docs/CONTRIBUTING.md 개발 환경).
 pub fn content_hash(bytes: &[u8]) -> String {
     blake3::hash(bytes).to_hex().to_string()
 }

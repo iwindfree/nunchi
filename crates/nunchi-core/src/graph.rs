@@ -1,11 +1,11 @@
-//! 메모리 상주 그래프 — 순회와 랭킹 (PLAN.md 2절·3.6절)
+//! 메모리 상주 그래프 — 순회와 랭킹 (docs/DESIGN.md 7절·3.6절)
 //!
 //! **순회 엔진은 저장 엔진이 아니다.** 엣지 100만 개는 메모리에 ~50MB로 들어가므로
 //! PPR·중심성은 여기서 계산한다. 이 설계 덕분에 저장 계층이 SQLite여도
 //! 그래프 DB의 순회 이점이 상쇄된다.
 //!
 //! 또한 Personalized PageRank는 **시드 의존적이라 미리 계산할 수 없다.**
-//! 그래서 C 계층(전역 파생값)을 쓰기 경로에서 뺄 수 있었다(PLAN.md 3.6절).
+//! 그래서 C 계층(전역 파생값)을 쓰기 경로에서 뺄 수 있었다(docs/DESIGN.md 8절).
 
 use crate::model::{EdgeKind, NodeId};
 use crate::store::sqlite::SqliteStore;

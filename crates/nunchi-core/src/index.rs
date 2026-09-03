@@ -89,7 +89,7 @@ pub fn index_all(config: &Config, store: &mut SqliteStore) -> Result<IndexStats>
     index_all_with_cache(config, store, None)
 }
 
-/// 캐시를 함께 쓰는 인덱싱. 브랜치 전환 시 재파싱을 피한다(PLAN 3.7절).
+/// 캐시를 함께 쓰는 인덱싱. 브랜치 전환 시 재파싱을 피한다(docs/DESIGN.md 9절).
 pub fn index_all_with_cache(
     config: &Config,
     store: &mut SqliteStore,
@@ -167,7 +167,7 @@ pub fn index_all_with_cache(
         }
     }
 
-    // ── 교차 저장소 계약 엣지 — v1의 하이라이트 (PLAN.md 3.9절) ──
+    // ── 교차 저장소 계약 엣지 — v1의 하이라이트 (docs/DESIGN.md 4·5절) ──
     // 라우트는 솔루션 전체에서 유일하므로 저장소가 달라도 매칭된다.
     let mut route_index: HashMap<(String, String), NodeId> = HashMap::new();
     for file in &pending {
@@ -540,7 +540,7 @@ fn scan_repo(
     let (branch, head) = git_head(root);
     store.record_repo(repo, &npath::normalize(root), branch.as_deref(), head.as_deref())?;
 
-    // git 이력은 브랜치 무관·커밋 시점 갱신이다(PLAN 3.6·3.7절).
+    // git 이력은 브랜치 무관·커밋 시점 갱신이다(docs/DESIGN.md 8·9절).
     if config.index.max_commits > 0 {
         let h = crate::history::index_history(repo, root, config.index.max_commits, nodes, edges)?;
         stats.commits += h.commits;

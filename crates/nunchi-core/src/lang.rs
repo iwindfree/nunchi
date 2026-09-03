@@ -1,4 +1,4 @@
-//! 언어 판별. v1 대상은 Java · TypeScript · Rust (PLAN.md 3.10절 도그푸딩 포함).
+//! 언어 판별. v1 대상은 Java · TypeScript · Rust (docs/CONTRIBUTING.md 개발 환경 도그푸딩 포함).
 
 use std::path::Path;
 

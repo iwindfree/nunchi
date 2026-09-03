@@ -1,4 +1,4 @@
-//! 프레임워크 의미론 추출 — Spring / React (PLAN.md 3.9절 Phase 1c)
+//! 프레임워크 의미론 추출 — Spring / React (docs/DESIGN.md 4·5절 Phase 1c)
 //!
 //! 이 계층이 없으면 그래프가 무너진다. Spring은 호출 관계가 **어노테이션과 DI로
 //! 구성**되어 소스에 구문적 호출이 존재하지 않기 때문이다. 실측에서 확인된 바:
@@ -93,7 +93,7 @@ pub struct ApiCallFact {
 /// 경로 템플릿 정규화.
 ///
 /// Spring `{id}`, Express/react-router `:id`, JS 템플릿 `${id}`를 모두 `{}`로 만들어
-/// 프런트–백엔드 매칭이 문자열 비교로 끝나게 한다 (PLAN.md 3.9절 `CALLS_API`).
+/// 프런트–백엔드 매칭이 문자열 비교로 끝나게 한다 (docs/DESIGN.md 4·5절 `CALLS_API`).
 /// 경로 치환이 세그먼트 전체가 아닌지 판정한다.
 ///
 /// `/orders/${id}` 는 경로 파라미터라 `{}` 로 정규화하면 되지만,

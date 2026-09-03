@@ -1,4 +1,4 @@
-//! 그래프 모델 — PLAN.md 2절 (노드 18종 / 엣지 19종)
+//! 그래프 모델 — docs/DESIGN.md 7절 (노드 18종 / 엣지 19종)
 
 use serde::{Deserialize, Serialize};
 
@@ -73,7 +73,7 @@ str_enum!(NodeKind {
     ExternalDep => "external_dep",
     ConfigKey => "config_key",
     Contract => "contract",
-    // 스택별 (PLAN.md 3.9절)
+    // 스택별 (docs/DESIGN.md 4·5절)
     Route => "route",
     ApiCall => "api_call",
     Bean => "bean",
@@ -97,7 +97,7 @@ str_enum!(EdgeKind {
     DependsOn => "depends_on",
     Exposes => "exposes",
     SharesContract => "shares_contract",
-    // 스택별 (PLAN.md 3.9절)
+    // 스택별 (docs/DESIGN.md 4·5절)
     CallsApi => "calls_api",
     Injects => "injects",
     PersistsTo => "persists_to",
@@ -105,7 +105,7 @@ str_enum!(EdgeKind {
     DuplicateOf => "duplicate_of",
 });
 
-// 엣지 출처. 2단 속도 인덱싱(PLAN.md 3.9절)에서 신뢰도 구분에 쓴다.
+// 엣지 출처. 2단 속도 인덱싱(docs/DESIGN.md 4·5절)에서 신뢰도 구분에 쓴다.
 str_enum!(Provenance {
     /// tree-sitter 빠른 경로 — 파일 저장 시 갱신, 크로스파일 해소는 휴리스틱
     Fast => "fast",
@@ -131,7 +131,7 @@ pub struct Node {
     pub signature: Option<String>,
     pub doc: Option<String>,
     pub lang: Option<String>,
-    /// 워킹트리 파일 내용 해시. git blob SHA가 아니다 — CRLF 차이 때문(PLAN.md 3.10절).
+    /// 워킹트리 파일 내용 해시. git blob SHA가 아니다 — CRLF 차이 때문(docs/CONTRIBUTING.md 개발 환경).
     pub content_hash: Option<String>,
     /// 소스 파일의 최종 수정 시각(Unix 초). 랭킹의 recency 항이 쓴다.
     pub mtime: Option<i64>,
@@ -156,7 +156,7 @@ impl Node {
         }
     }
 
-    /// `path:line` 형태의 좌표. 에이전트에게 돌려주는 값의 핵심(PLAN.md 1절 원칙 1).
+    /// `path:line` 형태의 좌표. 에이전트에게 돌려주는 값의 핵심(docs/DESIGN.md 2절 원칙 1).
     pub fn reference(&self) -> Option<String> {
         let path = self.path.as_ref()?;
         Some(match self.span {
@@ -175,7 +175,7 @@ pub struct Edge {
     pub dst: NodeId,
     pub kind: EdgeKind,
     pub provenance: Provenance,
-    /// 0.0~1.0. URL 템플릿 매칭 등 추론된 엣지는 1.0 미만(PLAN.md 3.9절).
+    /// 0.0~1.0. URL 템플릿 매칭 등 추론된 엣지는 1.0 미만(docs/DESIGN.md 4·5절).
     pub confidence: f32,
     /// 동시변경 결합도 등 가중 엣지용
     pub weight: f32,

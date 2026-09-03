@@ -1,4 +1,4 @@
-//! tree-sitter 심볼 추출 — 빠른 경로 (PLAN.md 3.9절 2단 속도 인덱싱)
+//! tree-sitter 심볼 추출 — 빠른 경로 (docs/DESIGN.md 4·5절 2단 속도 인덱싱)
 //!
 //! 파일 저장 시마다 도는 경로이므로 밀리초 단위여야 한다. 크로스파일 참조 해소는
 //! 이름 기반 휴리스틱이며, 정밀 해소는 SCIP 경로(Phase 1b)가 맡는다.
@@ -11,7 +11,7 @@ use streaming_iterator::StreamingIterator;
 use tree_sitter::{Language, Node, Parser, Query, QueryCursor};
 
 /// 파일 하나에서 뽑아낸 사실. 브랜치가 아니라 **내용의 함수**이므로
-/// 콘텐츠 주소 캐시(PLAN.md 3.7절)의 캐시 대상이 된다.
+/// 콘텐츠 주소 캐시(docs/DESIGN.md 9절)의 캐시 대상이 된다.
 #[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub struct FileFacts {
     pub symbols: Vec<SymbolFact>,
@@ -198,7 +198,7 @@ fn def_text<'a>(node: Node, bytes: &'a [u8]) -> String {
         .to_string()
 }
 
-/// 시그니처 대용 — 정의의 첫 줄. 팩 렌더링 L0/L1 티어에서 쓴다(PLAN.md 3절).
+/// 시그니처 대용 — 정의의 첫 줄. 팩 렌더링 L0/L1 티어에서 쓴다(docs/DESIGN.md 2절).
 fn first_line(node: Node, bytes: &[u8]) -> Option<String> {
     let text = node.utf8_text(bytes).ok()?;
     let line = text.lines().next()?.trim();

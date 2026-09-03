@@ -1,4 +1,4 @@
-//! MyBatis XML 매퍼 (PLAN.md 3.9절 영속 계층)
+//! MyBatis XML 매퍼 (docs/DESIGN.md 4·5절 영속 계층)
 //!
 //! 한국 기업 Spring 환경에서 MyBatis 비중이 크고, 그중 상당수가 XML 매퍼다.
 //! XML은 tree-sitter 문법을 붙이지 않고 직접 훑는다 — 필요한 것이

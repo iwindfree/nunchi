@@ -1,4 +1,4 @@
-//! nunchi CLI — 단일 바이너리, 서브커맨드 (PLAN.md 용어 절)
+//! nunchi CLI — 단일 바이너리, 서브커맨드 (README.md 명령 표)
 
 mod serve;
 mod tui;

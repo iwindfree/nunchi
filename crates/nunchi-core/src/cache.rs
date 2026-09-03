@@ -1,4 +1,4 @@
-//! 콘텐츠 주소 추출 캐시 (PLAN.md 3.7절)
+//! 콘텐츠 주소 추출 캐시 (docs/DESIGN.md 9절)
 //!
 //! 브랜치 전환의 재파싱 비용을 없앤다. 핵심 통찰은 **A 계층(파일 내부 사실)이
 //! 브랜치의 함수가 아니라 내용의 함수**라는 것이다:
@@ -11,7 +11,7 @@
 //! main → feature → main 왕복에서 복귀 시 파싱 0회가 된다.
 //!
 //! 캐시 키는 **git blob SHA가 아니라 워킹트리 파일 내용 해시**다.
-//! `core.autocrlf=true` 인 Windows에서는 두 값이 갈리기 때문이다(PLAN.md 3.10절).
+//! `core.autocrlf=true` 인 Windows에서는 두 값이 갈리기 때문이다(docs/CONTRIBUTING.md 개발 환경).
 
 use anyhow::Result;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -36,7 +36,7 @@ pub struct ExtractCache {
 
 impl ExtractCache {
     /// 저장소 인덱스와 **별도 파일**로 둔다. 워크트리마다 인덱스는 달라도
-    /// 캐시는 공유해야 하기 때문이다(PLAN.md 3.7절).
+    /// 캐시는 공유해야 하기 때문이다(docs/DESIGN.md 9절).
     pub fn open(path: &Path) -> Result<Self> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).ok();
