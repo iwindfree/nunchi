@@ -13,3 +13,8 @@
 ; 호출
 (method_invocation name: (identifier) @callee)
 (object_creation_expression type: (type_identifier) @callee)
+
+; 상속·구현
+(class_declaration name: (identifier) @sub superclass: (superclass (type_identifier) @super))
+(class_declaration name: (identifier) @sub interfaces: (super_interfaces (type_list (type_identifier) @super)))
+(interface_declaration name: (identifier) @sub (extends_interfaces (type_list (type_identifier) @super)))

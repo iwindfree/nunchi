@@ -11,8 +11,12 @@ use std::collections::HashMap;
 #[derive(Debug, Default)]
 pub struct SymbolTable {
     by_name: HashMap<String, Vec<NodeId>>,
+    /// 심볼 ID → 종류(`method`, `field` 등). 필드를 검증 대상에서 빼는 데 쓴다.
+    kinds: HashMap<String, String>,
     /// `com/example/OrderService.java` 같은 경로 → 파일 노드
     by_path: HashMap<String, NodeId>,
+    /// 상위 타입 이름 → 하위 타입 이름들. 인터페이스→구현 해소용.
+    implementors: HashMap<String, Vec<String>>,
 }
 
 /// 후보가 이보다 많으면 해소를 포기한다. `get`·`build` 같은 흔한 이름이
@@ -67,8 +71,66 @@ impl ResolveStats {
 }
 
 impl SymbolTable {
-    pub fn insert_symbol(&mut self, name: &str, id: NodeId) {
+    pub fn insert_symbol(&mut self, name: &str, id: NodeId, kind: &str) {
+        self.kinds.insert(id.0.clone(), kind.to_string());
         self.by_name.entry(name.to_string()).or_default().push(id);
+    }
+
+    /// 호출 대상으로 의미 있는 단위인지. 필드·프로퍼티는 제외한다 —
+    /// Lombok 빌더(`.body(...)`)나 접근자 호출이 전부 "검증 대상"으로 잡히면
+    /// TESTS 엣지가 잡음으로 뒤덮인다(실측에서 628건 중 대부분이 그랬다).
+    pub fn is_callable_unit(&self, id: &NodeId) -> bool {
+        matches!(
+            self.kinds.get(&id.0).map(String::as_str),
+            Some("method" | "function" | "constructor" | "class" | "record")
+        )
+    }
+
+    /// `OrderServiceTest` → `OrderService` 처럼 이름으로 검증 대상을 찾는다.
+    /// 호출 기반보다 정밀도가 훨씬 높다.
+    pub fn subject_of_test(&self, test_name: &str) -> Vec<NodeId> {
+        let base = test_name
+            .strip_suffix("Tests")
+            .or_else(|| test_name.strip_suffix("Test"))
+            .or_else(|| test_name.strip_suffix("Spec"))
+            .or_else(|| test_name.strip_prefix("Test"))
+            .unwrap_or("");
+        if base.len() < 3 {
+            return Vec::new();
+        }
+        self.candidates(base)
+            .iter()
+            .filter(|id| self.is_callable_unit(id))
+            .cloned()
+            .collect()
+    }
+
+    /// 심볼이 테스트 코드에 정의됐는지. NodeId에 경로가 들어 있어 그것으로 판단한다.
+    pub fn is_test_symbol(&self, id: &NodeId) -> bool {
+        crate::index::is_test_path(id.as_str())
+    }
+
+    pub fn insert_supertype(&mut self, sub: &str, sup: &str) {
+        self.implementors
+            .entry(sup.to_string())
+            .or_default()
+            .push(sub.to_string());
+    }
+
+    /// 주입 대상 해소. `@Autowired OrderService`(인터페이스)를 실제 구현체로 잇는다.
+    ///
+    /// 인터페이스 자체도 후보로 남긴다 — 구현이 여러 개일 때 인터페이스가
+    /// 공통 진입점 역할을 하기 때문이다.
+    pub fn resolve_injection(&self, type_name: &str) -> Vec<NodeId> {
+        let mut out: Vec<NodeId> = self.candidates(type_name).to_vec();
+        if let Some(impls) = self.implementors.get(type_name) {
+            for name in impls {
+                out.extend(self.candidates(name).iter().cloned());
+            }
+        }
+        out.sort();
+        out.dedup();
+        out
     }
 
     pub fn insert_file(&mut self, path: &str, id: NodeId) {
@@ -189,7 +251,7 @@ mod tests {
     #[test]
     fn single_candidate_resolves() {
         let mut table = SymbolTable::default();
-        table.insert_symbol("findOne", NodeId("sym:api/A.java#findOne".into()));
+        table.insert_symbol("findOne", NodeId("sym:api/A.java#findOne".into()), "method");
         let mut stats = ResolveStats::default();
         let hits = table.resolve_call("findOne", &mut stats, &mut UnresolvedTally::default());
         assert_eq!(hits.len(), 1);
@@ -210,11 +272,41 @@ mod tests {
     fn too_many_candidates_are_dropped() {
         let mut table = SymbolTable::default();
         for i in 0..10 {
-            table.insert_symbol("get", NodeId(format!("sym:{i}")));
+            table.insert_symbol("get", NodeId(format!("sym:{i}")), "method");
         }
         let mut stats = ResolveStats::default();
         assert!(table.resolve_call("get", &mut stats, &mut UnresolvedTally::default()).is_empty());
         assert_eq!(stats.dropped, 1);
+    }
+
+    #[test]
+    fn injection_resolves_through_implementors() {
+        let mut t = SymbolTable::default();
+        t.insert_symbol("OrderService", NodeId("sym:api/OrderService.java#OrderService".into()), "interface");
+        t.insert_symbol("OrderServiceImpl", NodeId("sym:api/OrderServiceImpl.java#OrderServiceImpl".into()), "class");
+        t.insert_supertype("OrderServiceImpl", "OrderService");
+
+        // 인터페이스를 주입받으면 인터페이스와 구현체가 모두 후보다.
+        let hits = t.resolve_injection("OrderService");
+        assert_eq!(hits.len(), 2, "구현체까지 이어져야 한다: {hits:?}");
+
+        // 상속 관계가 없는 타입은 자기 자신만.
+        t.insert_symbol("Standalone", NodeId("sym:api/S.java#Standalone".into()), "class");
+        assert_eq!(t.resolve_injection("Standalone").len(), 1);
+    }
+
+    #[test]
+    fn test_subject_is_found_by_name_and_fields_excluded() {
+        let mut t = SymbolTable::default();
+        t.insert_symbol("OrderService", NodeId("sym:api/OrderService.java#OrderService".into()), "class");
+        t.insert_symbol("body", NodeId("sym:api/Dto.java#body".into()), "field");
+
+        assert_eq!(t.subject_of_test("OrderServiceTest").len(), 1);
+        assert_eq!(t.subject_of_test("TestOrderService").len(), 1);
+        // 필드는 검증 대상이 아니다 — Lombok 빌더 호출이 전부 걸리는 것을 막는다.
+        assert!(!t.is_callable_unit(&NodeId("sym:api/Dto.java#body".into())));
+        // 너무 짧은 접두는 오탐이 된다.
+        assert!(t.subject_of_test("AbTest").is_empty());
     }
 
     #[test]

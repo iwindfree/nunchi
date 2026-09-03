@@ -17,6 +17,10 @@ pub struct FileFacts {
     pub symbols: Vec<SymbolFact>,
     pub imports: Vec<String>,
     pub calls: Vec<CallFact>,
+    /// (하위 타입, 상위 타입) — 인터페이스→구현 해소에 쓴다.
+    /// Spring `@Autowired Interface` 를 실제 구현체로 잇는 근거다.
+    #[serde(default)]
+    pub supertypes: Vec<(String, String)>,
     /// 파서가 오류 노드를 만들었는지. `nunchi doctor` 커버리지에 쓴다.
     pub had_parse_error: bool,
 }
@@ -124,6 +128,8 @@ pub fn extract(lang: SupportedLang, path: &Path, source: &str) -> Result<FileFac
     while let Some(m) = matches.next() {
         let mut def_node: Option<(Node, &str)> = None;
         let mut name: Option<String> = None;
+        let mut sub: Option<String> = None;
+        let mut sup: Option<String> = None;
 
         for cap in m.captures {
             let cap_name = &query.capture_names()[cap.index as usize];
@@ -134,6 +140,8 @@ pub fn extract(lang: SupportedLang, path: &Path, source: &str) -> Result<FileFac
             } else {
                 match *cap_name {
                     "name" => name = Some(text.to_string()),
+                    "sub" => sub = Some(text.to_string()),
+                    "super" => sup = Some(text.to_string()),
                     "callee" => facts.calls.push(CallFact {
                         callee: text.to_string(),
                         line: cap.node.start_position().row as u32 + 1,
@@ -143,6 +151,12 @@ pub fn extract(lang: SupportedLang, path: &Path, source: &str) -> Result<FileFac
                     }
                     _ => {}
                 }
+            }
+        }
+
+        if let (Some(sub), Some(sup)) = (sub, sup) {
+            if sub != sup {
+                facts.supertypes.push((sub, sup));
             }
         }
 
@@ -377,6 +391,59 @@ namespace MyApp
         // partial이 아닌 클래스는 영향받지 않는다.
         let plain = extract(SupportedLang::CSharp, Path::new("X.cs"), "public class Plain {}")?;
         assert!(!plain.symbols.iter().find(|s| s.name == "Plain").unwrap().partial);
+        Ok(())
+    }
+
+    #[test]
+    fn extracts_supertypes_across_languages() -> Result<()> {
+        let cases: Vec<(SupportedLang, &str, &str, (&str, &str))> = vec![
+            (
+                SupportedLang::Java,
+                "A.java",
+                "class OrderServiceImpl implements OrderService {}",
+                ("OrderServiceImpl", "OrderService"),
+            ),
+            (
+                SupportedLang::Java,
+                "B.java",
+                "class Child extends Base {}",
+                ("Child", "Base"),
+            ),
+            (
+                SupportedLang::TypeScript,
+                "a.ts",
+                "class Impl extends BaseCmp {}",
+                ("Impl", "BaseCmp"),
+            ),
+            (
+                SupportedLang::Python,
+                "a.py",
+                "class OrderRepo(BaseRepo):\n    pass\n",
+                ("OrderRepo", "BaseRepo"),
+            ),
+            (
+                SupportedLang::CSharp,
+                "A.cs",
+                "public class OrderForm : Form {}",
+                ("OrderForm", "Form"),
+            ),
+            (
+                SupportedLang::Rust,
+                "a.rs",
+                "impl Store for SqliteStore {}",
+                ("SqliteStore", "Store"),
+            ),
+        ];
+        for (lang, file, src, (want_sub, want_sup)) in cases {
+            let f = extract(lang, Path::new(file), src)?;
+            assert!(
+                f.supertypes
+                    .iter()
+                    .any(|(a, b)| a == want_sub && b == want_sup),
+                "{lang:?}: {want_sub} → {want_sup} 를 찾지 못함. got {:?}",
+                f.supertypes
+            );
+        }
         Ok(())
     }
 

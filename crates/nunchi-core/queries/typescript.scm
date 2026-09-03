@@ -18,3 +18,8 @@
 ; 호출
 (call_expression function: (identifier) @callee)
 (call_expression function: (member_expression property: (property_identifier) @callee))
+
+; 상속·구현
+(class_declaration name: (type_identifier) @sub (class_heritage (extends_clause value: (identifier) @super)))
+(class_declaration name: (type_identifier) @sub (class_heritage (implements_clause (type_identifier) @super)))
+(interface_declaration name: (type_identifier) @sub (extends_type_clause type: (type_identifier) @super))

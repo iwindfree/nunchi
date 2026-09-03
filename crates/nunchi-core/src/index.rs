@@ -54,6 +54,8 @@ pub struct IndexStats {
     pub cache_misses: usize,
     /// 사라진 파일 때문에 인덱스에서 제거된 노드 수
     pub pruned: usize,
+    pub supertypes: usize,
+    pub test_links: usize,
 }
 
 pub fn build_exclude_set(patterns: &[String]) -> Result<GlobSet> {
@@ -202,10 +204,27 @@ pub fn index_all_with_cache(
             }
         }
 
-        // DI 주입 — 타입 이름을 심볼로 해소한다.
+        // 상속·구현 엣지
+        for (sub, sup) in &file.facts.supertypes {
+            let src = NodeId::symbol(&file.repo, &file.rel, sub);
+            for dst in table.candidates(sup) {
+                edges.push(
+                    Edge::new(
+                        src.clone(),
+                        dst.clone(),
+                        EdgeKind::ExtendsImplements,
+                        Provenance::Fast,
+                    )
+                    .with_confidence(0.85),
+                );
+                stats.supertypes += 1;
+            }
+        }
+
+        // DI 주입 — 인터페이스를 주입받으면 구현체까지 잇는다.
         for inject in &file.fw.injects {
             let owner = NodeId::symbol(&file.repo, &file.rel, &inject.owner);
-            let candidates = table.candidates(&inject.injected_type);
+            let candidates = table.resolve_injection(&inject.injected_type);
             if candidates.is_empty() {
                 stats.injects_unresolved += 1;
                 continue;
@@ -217,6 +236,47 @@ pub fn index_all_with_cache(
                     Edge::new(owner.clone(), dst.clone(), EdgeKind::Injects, Provenance::Fast)
                         .with_confidence(confidence),
                 );
+            }
+        }
+
+        // TESTS — "이거 고치면 어떤 테스트가 깨지나"에 답하는 엣지.
+        //
+        // 두 경로를 쓴다. 이름 기반이 정밀도가 훨씬 높으므로 우선한다.
+        // 호출 기반만 쓰면 테스트 셋업이 만지는 DTO 필드까지 전부 검증 대상이 된다
+        // (실측: 628건 중 대부분이 Lombok 빌더의 필드 접근자였다).
+        if is_test_path(&file.rel) {
+            let mut linked: std::collections::HashSet<(String, String)> =
+                std::collections::HashSet::new();
+
+            // ① 이름 기반: OrderServiceTest → OrderService
+            for sym in &file.facts.symbols {
+                let src = NodeId::symbol(&file.repo, &file.rel, &sym.name);
+                for dst in table.subject_of_test(&sym.name) {
+                    if linked.insert((src.0.clone(), dst.0.clone())) {
+                        edges.push(
+                            Edge::new(src.clone(), dst, EdgeKind::Tests, Provenance::Fast)
+                                .with_confidence(0.9),
+                        );
+                        stats.test_links += 1;
+                    }
+                }
+            }
+
+            // ② 호출 기반: 메서드·함수·클래스만. 필드·프로퍼티는 제외한다.
+            for call in &file.facts.calls {
+                let Some(src) = enclosing_symbol(&file.symbol_spans, call.line) else { continue };
+                for dst in table.candidates(&call.callee) {
+                    if table.is_test_symbol(dst) || !table.is_callable_unit(dst) {
+                        continue;
+                    }
+                    if linked.insert((src.0.clone(), dst.0.clone())) {
+                        edges.push(
+                            Edge::new(src.clone(), dst.clone(), EdgeKind::Tests, Provenance::Fast)
+                                .with_confidence(0.6),
+                        );
+                        stats.test_links += 1;
+                    }
+                }
             }
         }
     }
@@ -233,6 +293,26 @@ pub fn index_all_with_cache(
     stats.pruned += store.prune_orphans()?;
     persist_metrics(store, &stats)?;
     Ok(stats)
+}
+
+/// 테스트 파일 판별. 자바(`src/test/`), JS/TS(`*.test.ts`, `__tests__/`),
+/// 파이썬(`test_*.py`), C#(`*Tests.cs`) 관용구를 모두 다룬다.
+pub fn is_test_path(rel: &str) -> bool {
+    let lower = rel.to_lowercase();
+    lower.contains("/test/")
+        || lower.contains("/tests/")
+        || lower.contains("__tests__")
+        || lower.starts_with("test/")
+        || lower.starts_with("tests/")
+        || lower.ends_with("_test.rs")
+        || lower.ends_with(".test.ts")
+        || lower.ends_with(".test.tsx")
+        || lower.ends_with(".test.js")
+        || lower.ends_with(".spec.ts")
+        || lower.ends_with(".spec.js")
+        || lower.ends_with("test.java")
+        || lower.ends_with("tests.cs")
+        || rel.rsplit('/').next().is_some_and(|f| f.starts_with("test_") && f.ends_with(".py"))
 }
 
 /// 라우트 노드 ID. 솔루션 전역에서 유일해야 프런트–백엔드가 같은 노드를 가리킨다.
@@ -540,7 +620,7 @@ fn scan_repo(
                 EdgeKind::DefinedIn,
                 Provenance::Fast,
             ));
-            table.insert_symbol(&sym.name, sym_id.clone());
+            table.insert_symbol(&sym.name, sym_id.clone(), &sym.kind);
             symbol_spans.push((sym.span, sym_id));
             stats.symbols += 1;
         }
@@ -555,6 +635,10 @@ fn scan_repo(
                 )
                 .with_confidence(0.9),
             );
+        }
+
+        for (sub, sup) in &facts.supertypes {
+            table.insert_supertype(sub, sup);
         }
 
         pending.push(PendingFile {
@@ -592,6 +676,8 @@ fn persist_metrics(store: &mut SqliteStore, stats: &IndexStats) -> Result<()> {
         "injects_resolved": stats.injects_resolved,
         "injects_unresolved": stats.injects_unresolved,
         "pruned": stats.pruned,
+        "supertypes": stats.supertypes,
+        "test_links": stats.test_links,
         "cache_hits": stats.cache_hits,
         "cache_misses": stats.cache_misses,
         "commits": stats.commits,

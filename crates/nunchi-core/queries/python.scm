@@ -9,3 +9,6 @@
 ; 호출
 (call function: (identifier) @callee)
 (call function: (attribute attribute: (identifier) @callee))
+
+; 상속
+(class_definition name: (identifier) @sub superclasses: (argument_list (identifier) @super))
