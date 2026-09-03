@@ -75,6 +75,8 @@ TUI에 보이는 것이 에이전트가 받는 것과 동일합니다.
    │
    └─ git log → Commit/Author, MODIFIED_BY, CO_CHANGED_WITH
    │
+   └─ 정리: 사라진 파일의 노드 → 끊긴 엣지 → 고아 노드(연쇄)
+   │
    ▼
  SQLite (nodes, edges, nodes_fts, repos, meta)
    │

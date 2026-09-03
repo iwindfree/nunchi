@@ -269,6 +269,57 @@ impl SqliteStore {
         Ok(doomed.len())
     }
 
+    /// 아무도 참조하지 않게 된 파생 노드를 지운다.
+    ///
+    /// `ExternalDep`·`Commit`·`Author`는 경로가 없어 `prune_missing_files`의
+    /// 대상이 아니지만, 자신을 가리키던 파일이 사라지면 고아가 된다.
+    /// (`dep:react` 는 마지막 import가 사라져도 남고, 커밋은 파일이 다 지워지면
+    /// 아무도 가리키지 않는다.)
+    ///
+    /// 삭제가 연쇄한다 — 커밋이 지워져야 그 저자가 비로소 고아가 된다.
+    /// 그래서 변화가 없을 때까지 반복한다.
+    ///
+    /// `Repo`·`Solution`은 애초에 들어오는 엣지가 없는 뿌리이므로 제외한다.
+    pub fn prune_orphans(&mut self) -> Result<usize> {
+        const DEPENDENT_KINDS: &str = "'external_dep','commit','author'";
+        const MAX_PASSES: usize = 5;
+
+        let mut total = 0usize;
+        for _ in 0..MAX_PASSES {
+            let tx = self.conn.transaction()?;
+            let doomed: Vec<String> = {
+                let mut stmt = tx.prepare(&format!(
+                    "SELECT id FROM nodes
+                     WHERE kind IN ({DEPENDENT_KINDS})
+                       AND id NOT IN (SELECT dst FROM edges)"
+                ))?;
+                let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+                rows.collect::<Result<Vec<_>, _>>()?
+            };
+            if doomed.is_empty() {
+                tx.commit()?;
+                break;
+            }
+            {
+                let mut del_node = tx.prepare("DELETE FROM nodes WHERE id = ?1")?;
+                let mut del_fts = tx.prepare("DELETE FROM nodes_fts WHERE id = ?1")?;
+                for id in &doomed {
+                    del_node.execute(params![id])?;
+                    del_fts.execute(params![id])?;
+                }
+                tx.execute(
+                    "DELETE FROM edges
+                     WHERE src NOT IN (SELECT id FROM nodes)
+                        OR dst NOT IN (SELECT id FROM nodes)",
+                    [],
+                )?;
+            }
+            tx.commit()?;
+            total += doomed.len();
+        }
+        Ok(total)
+    }
+
     pub fn clear(&mut self) -> Result<()> {
         self.conn.execute_batch(
             "DELETE FROM nodes; DELETE FROM edges; DELETE FROM nodes_fts; DELETE FROM repos;",
@@ -609,6 +660,32 @@ mod tests {
         assert_eq!(store.count_edges()?, 0, "끊긴 엣지도 정리되어야 한다");
         // FTS에서도 사라져야 검색에 안 잡힌다.
         assert!(store.search("betaFn", 5)?.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn orphan_sweep_cascades_and_spares_roots() -> Result<()> {
+        let mut store = SqliteStore::open_in_memory()?;
+        let repo_node = Node::new(NodeId::repo("api"), NodeKind::Repo, "api", "api");
+        let file = sample_file("api", "A.java", "java");
+        let dep = Node::new(NodeId("dep:spring".into()), NodeKind::ExternalDep, "spring", "api");
+        let commit = Node::new(NodeId("commit:api/abc".into()), NodeKind::Commit, "abc", "api");
+        let author = Node::new(NodeId("author:x@y".into()), NodeKind::Author, "x", "api");
+        store.upsert_nodes(&[repo_node.clone(), file.clone(), dep.clone(), commit.clone(), author.clone()])?;
+        store.upsert_edges(&[
+            Edge::new(file.id.clone(), dep.id.clone(), EdgeKind::DependsOn, Provenance::Fast),
+            Edge::new(file.id.clone(), commit.id.clone(), EdgeKind::ModifiedBy, Provenance::Precise),
+            Edge::new(commit.id.clone(), author.id.clone(), EdgeKind::AuthoredBy, Provenance::Precise),
+        ])?;
+        // 참조가 살아 있는 동안에는 아무것도 지우지 않는다.
+        assert_eq!(store.prune_orphans()?, 0);
+
+        // 파일이 사라지면 dep·commit이 고아가 되고, commit이 지워져야 author도 고아가 된다.
+        store.prune_missing_files("api", &[])?;
+        assert_eq!(store.prune_orphans()?, 3, "연쇄 삭제가 되어야 한다");
+
+        // 뿌리 노드는 들어오는 엣지가 없어도 살아남아야 한다.
+        assert!(store.get_node(&repo_node.id)?.is_some(), "Repo 노드를 지우면 안 된다");
         Ok(())
     }
 

@@ -229,6 +229,8 @@ pub fn index_all_with_cache(
     for (repo, seen) in &seen_by_repo {
         stats.pruned += store.prune_missing_files(repo, seen)?;
     }
+    // 파일이 지워지면 그것만 참조하던 의존성·커밋·저자가 고아가 된다.
+    stats.pruned += store.prune_orphans()?;
     persist_metrics(store, &stats)?;
     Ok(stats)
 }
