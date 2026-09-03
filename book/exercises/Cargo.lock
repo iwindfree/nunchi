@@ -122,3 +122,43 @@ version = "0.1.0"
 [[package]]
 name = "ex_03_03_b"
 version = "0.1.0"
+
+[[package]]
+name = "ex_04_01_a"
+version = "0.1.0"
+
+[[package]]
+name = "ex_04_01_b"
+version = "0.1.0"
+
+[[package]]
+name = "ex_04_01_c"
+version = "0.1.0"
+
+[[package]]
+name = "ex_04_02_a"
+version = "0.1.0"
+
+[[package]]
+name = "ex_04_02_b"
+version = "0.1.0"
+
+[[package]]
+name = "ex_04_02_c"
+version = "0.1.0"
+
+[[package]]
+name = "ex_04_03_a"
+version = "0.1.0"
+
+[[package]]
+name = "ex_04_03_b"
+version = "0.1.0"
+
+[[package]]
+name = "ex_04_03_c"
+version = "0.1.0"
+
+[[package]]
+name = "ex_04_03_d"
+version = "0.1.0"
