@@ -9,6 +9,7 @@ default-theme = "rust"
 preferred-dark-theme = "navy"
 git-repository-url = "https://github.com/iwindfree/nunchi"
 edit-url-template = "https://github.com/iwindfree/nunchi/edit/main/book/{path}"
+additional-js = ["mermaid.min.js", "mermaid-init.js"]
 
 [output.html.fold]
 enable = true
@@ -20,3 +21,8 @@ limit-results = 20
 
 [output.html.playground]
 editable = false
+
+[preprocessor]
+
+[preprocessor.mermaid]
+command = "mdbook-mermaid"

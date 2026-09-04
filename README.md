@@ -29,6 +29,7 @@ Rust 1.90 이상이 필요합니다. macOS와 Windows에서 각각 네이티브�
 | [사용 안내서](docs/GUIDE.md) | 이 도구를 실제로 쓰려는 사람 |
 | [설계 문서](docs/DESIGN.md) | 왜 토큰이 줄어드는지, 왜 이렇게 만들었는지 알고 싶은 사람 |
 | [기여 안내서](docs/CONTRIBUTING.md) | 코드를 고치거나 이어받으려는 사람 |
+| [학습용 책](book/src/intro.md) | Rust와 이 코드를 처음부터 배우려는 사람 |
 
 처음 접하셨다면 설계 문서를 먼저 읽으시기를 권합니다. 이 도구가 무엇을 하는지
 이해하지 못한 상태에서는 사용 안내서의 지시가 왜 필요한지 알기 어렵습니다.
@@ -69,3 +70,20 @@ cargo build --release
 ```
 
 크레이트 구조와 작업 절차는 [기여 안내서](docs/CONTRIBUTING.md)를 참고하시기 바랍니다.
+
+## 학습용 책
+
+Rust 문법 28장과 nunchi 코드 설명 12장, 연습문제 57개로 이루어진 책이
+`book/`에 있습니다. Rust를 처음 접하는 사람도 읽을 수 있게 썼습니다.
+
+```bash
+cargo install mdbook mdbook-mermaid
+cd book && mdbook serve --open
+```
+
+연습문제는 이렇게 풉니다.
+
+```bash
+cd book/exercises
+cargo test -p ex_01_04_a
+```
