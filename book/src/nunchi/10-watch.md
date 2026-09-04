@@ -43,7 +43,7 @@ let mut watcher = notify::recommended_watcher(move |res: notify::Result<Event>| 
 `notify` 크레이트가 운영체제마다 다른 감시 방식을 감싸 줍니다. macOS는
 FSEvents, Windows는 `ReadDirectoryChangesW`, Linux는 inotify를 씁니다.
 
-콜백은 **다른 스레드에서** 불립니다. 그래서 채널로 주 스레드에 보냅니다
+콜백은 **다른 스레드에서** 호출됩니다. 그래서 채널로 주 스레드에 보냅니다
 ([8.2장](../rust/08-2-channels.md)).
 
 `move`가 붙은 이유는 `tx`의 소유권을 콜백으로 넘겨야 하기 때문입니다.
@@ -151,7 +151,7 @@ match reindex(&config, &db_path, &cache_path) {
 처리됩니다.
 
 재인덱싱이 실패해도 `eprintln!`으로 알리기만 하고 반복을 계속합니다.
-데몬이 오류 하나로 죽으면 안 되기 때문입니다.
+데몬이 오류 하나로 종료되면 안 되기 때문입니다.
 
 ### 재인덱싱
 
@@ -168,7 +168,7 @@ fn reindex(config: &Config, db_path: &PathBuf, cache_path: &PathBuf) -> Result<i
 
 **전체를 다시 인덱싱합니다.** 바뀐 파일만 처리하지 않습니다.
 
-비효율로 보이지만 콘텐츠 주소 캐시 덕분에 비용이 낮습니다. 바뀌지 않은
+비효율로 보이지만 내용 해시 기반 캐시 덕분에 비용이 낮습니다. 바뀌지 않은
 파일은 해시가 같으므로 파싱하지 않고 캐시에서 꺼냅니다.
 
 실측입니다.
@@ -212,6 +212,6 @@ fn reindex(config: &Config, db_path: &PathBuf, cache_path: &PathBuf) -> Result<i
 
 `.nunchi`와 `.git` 변경을 무시하지 않으면 무한 반복이 됩니다.
 
-재인덱싱은 전체를 다시 하지만 콘텐츠 주소 캐시 덕분에 0.2초입니다.
+재인덱싱은 전체를 다시 하지만 내용 해시 기반 캐시 덕분에 0.2초입니다.
 
 다음 장에서 마지막으로 MCP 서버와 TUI를 봅니다.

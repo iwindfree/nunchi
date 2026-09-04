@@ -52,7 +52,7 @@ for n in names.into_iter() { }   // n 은 String 입니다
 println!("{:?}", names);          // 오류입니다. 소유권이 넘어갔습니다
 ```
 
-`for n in names`처럼 그냥 쓰면 `.into_iter()`가 불립니다. 그래서 반복 뒤에
+`for n in names`처럼 그냥 쓰면 `.into_iter()`가 호출됩니다. 그래서 반복 뒤에
 원본을 쓸 수 없게 됩니다.
 
 ```rust
@@ -82,7 +82,7 @@ let lengths = names.iter().map(|n| n.len());     // 아직 아무 일도 안 했
 let total: usize = lengths.sum();                // 여기서 실행됩니다
 ```
 
-이것을 게으른 평가(lazy evaluation)라고 부릅니다. 덕분에 여러 단계를 이어도
+이것을 지연 평가(lazy evaluation)라고 부릅니다. 덕분에 여러 단계를 이어도
 목록을 여러 번 훑지 않습니다. 한 번만 훑으면서 모든 단계를 적용합니다.
 
 ## 자주 쓰는 변형

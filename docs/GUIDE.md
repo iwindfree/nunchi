@@ -81,7 +81,7 @@ exclude = ["**/node_modules/**", "**/build/**", "**/target/**"]
 ### 2단계: `nunchi index`
 
 ```bash
-nunchi index                # 증분 인덱싱이며 콘텐츠 주소 캐시를 사용합니다
+nunchi index                # 증분 인덱싱이며 내용 해시 기반 캐시를 사용합니다
 nunchi index --rebuild      # 인덱스를 지우고 처음부터 다시 만듭니다
 nunchi index --watch        # 데몬으로 실행하며 파일 변경을 감시합니다
 ```

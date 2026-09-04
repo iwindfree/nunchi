@@ -157,7 +157,7 @@ let mut watcher = notify::recommended_watcher(move |res: notify::Result<Event>| 
 })?;
 ```
 
-파일 변경이 생길 때마다 이 클로저가 불립니다. **다른 스레드에서 불립니다.**
+파일 변경이 생길 때마다 이 클로저가 호출됩니다. **다른 스레드에서 호출됩니다.**
 그래서 `tx`의 소유권을 가져가야 하고, `move`가 필수입니다.
 
 ## 클로저를 받는 함수를 읽는 법

@@ -131,7 +131,7 @@ let opts = nunchi_core::pack::PackOptions {
 
 ## `.clone()`으로 더 나은 설계를 미룬 경우
 
-정직하게 말하면 nunchi에도 그런 곳이 있습니다.
+솔직히 말하면 nunchi에도 그런 곳이 있습니다.
 
 ```rust
 // crates/nunchi-core/src/index.rs 에서

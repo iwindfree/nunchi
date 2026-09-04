@@ -98,7 +98,7 @@ tracing_subscriber::fmt()
 `.with_writer(std::io::stderr)`가 중요합니다. 이 줄이 없으면 로그가 표준
 출력으로 나갑니다.
 
-**MCP 서버에서는 표준 출력이 JSON-RPC 전용 통로입니다.** 로그가 섞이면
+**MCP 서버에서는 표준 출력이 JSON-RPC 메시지 전용입니다.** 로그가 섞이면
 프로토콜이 깨집니다. 실제로 개발 중에 이 문제를 겪었습니다.
 `initialize`는 성공하는데 그다음 `tools/list`에서 응답을 파싱하지 못했습니다.
 원인이 로그였습니다.
