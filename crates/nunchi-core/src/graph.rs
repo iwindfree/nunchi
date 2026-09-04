@@ -81,6 +81,7 @@ impl MemGraph {
     ///
     /// 엣지를 무향으로 다룬다 — "이 심볼을 호출하는 쪽"도 "호출당하는 쪽"만큼
     /// 컨텍스트로 중요하기 때문이다.
+    // ANCHOR: ppr
     pub fn personalized_pagerank(&self, seeds: &[usize], damping: f32, iterations: usize) -> Vec<f32> {
         let n = self.ids.len();
         let mut rank = vec![0.0f32; n];
@@ -130,6 +131,7 @@ impl MemGraph {
         }
         rank
     }
+    // ANCHOR_END: ppr
 
     /// 무가중 도수 중심성(정규화). 허브 심볼을 살짝 끌어올리는 용도다.
     pub fn degree_centrality(&self) -> Vec<f32> {

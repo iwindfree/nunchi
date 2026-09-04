@@ -274,6 +274,7 @@ pub fn build_pack(
     let mut covered_files: std::collections::HashSet<(String, String)> =
         std::collections::HashSet::new();
 
+    // ANCHOR: budget_loop
     let top_score = scored.first().map(|(_, s, _)| *s).unwrap_or(0.0);
     let floor = top_score * opts.min_score_ratio;
 
@@ -339,6 +340,7 @@ pub fn build_pack(
         used += item.tokens;
         items.push(item);
     }
+    // ANCHOR_END: budget_loop
 
     // 교차 저장소 연결 — 이 프로젝트의 존재 이유 (docs/DESIGN.md 4·5절)
     let related = collect_related(store, graph, &seed_idx, &items)?;

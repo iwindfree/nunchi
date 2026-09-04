@@ -32,6 +32,7 @@ pub struct RankOpts {
 }
 
 /// 그래프 저장소. 구현체는 `sqlite::SqliteStore`.
+// ANCHOR: store_trait
 pub trait Store {
     fn upsert_nodes(&mut self, nodes: &[Node]) -> Result<usize>;
 
@@ -56,3 +57,4 @@ pub trait Store {
     /// (docs/DESIGN.md 8절 — C 계층을 쓰기 경로에서 제외).
     fn rank(&self, seeds: &[NodeId], opts: &RankOpts) -> Result<Vec<Ranked>>;
 }
+// ANCHOR_END: store_trait

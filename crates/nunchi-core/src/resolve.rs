@@ -143,6 +143,7 @@ impl SymbolTable {
     }
 
     /// 호출 하나를 해소한다. 반환값은 `(대상, confidence)` 목록.
+    // ANCHOR: resolve_call
     pub fn resolve_call(
         &self,
         callee: &str,
@@ -174,6 +175,7 @@ impl SymbolTable {
             }
         }
     }
+    // ANCHOR_END: resolve_call
 
     /// import 경로를 저장소 내 파일로 해소한다. 실패하면 외부 의존성이다.
     pub fn resolve_import(&self, lang: &str, from_file: &str, spec: &str) -> Option<NodeId> {

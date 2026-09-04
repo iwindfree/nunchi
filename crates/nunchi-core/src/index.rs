@@ -553,6 +553,7 @@ fn scan_repo(
 
     // filter_entry로 **디렉터리 자체를 쳐낸다.** 파일 단위로만 걸러내면
     // node_modules/·target/·build/ 안까지 전부 걸어 들어간다.
+    // ANCHOR: prune_walk
     let prune_root = root.to_path_buf();
     let prune_set = excludes.clone();
     let walker = ignore::WalkBuilder::new(root)
@@ -573,6 +574,7 @@ fn scan_repo(
             }
         })
         .build();
+    // ANCHOR_END: prune_walk
 
     for entry in walker {
         let Ok(entry) = entry else { continue };
