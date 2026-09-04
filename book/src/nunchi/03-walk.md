@@ -38,7 +38,9 @@ flowchart TD
 
 ### 디렉터리를 통째로 쳐냅니다
 
+```rust
 {{#include ../../../crates/nunchi-core/src/index.rs:prune_walk}}
+```
 
 이 부분이 이 장에서 가장 중요합니다. 한 줄씩 봅니다.
 
