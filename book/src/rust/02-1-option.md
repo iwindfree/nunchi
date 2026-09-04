@@ -6,7 +6,7 @@
 nunchi 코드에 `Option`이 100번 나옵니다. 값이 없을 수도 있는 상황을 다루는
 방법입니다.
 
-## 다른 언어의 null 과 무엇이 다른가
+## 다른 언어의 `null`과 무엇이 다른가
 
 대부분의 언어에는 "값이 없음"을 나타내는 특별한 값이 있습니다. Java의 `null`,
 Python의 `None`, JavaScript의 `undefined`가 그렇습니다.

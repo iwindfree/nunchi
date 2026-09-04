@@ -9,7 +9,7 @@
 
 ```
 crates/nunchi-core/src/
-├── lib.rs           크레이트의 뿌리입니다
+├── lib.rs           크레이트의 루트입니다
 ├── model.rs         model 모듈입니다
 ├── pack.rs          pack 모듈입니다
 └── store/
@@ -17,7 +17,7 @@ crates/nunchi-core/src/
     └── sqlite.rs    store::sqlite 모듈입니다
 ```
 
-파일을 만들었다고 자동으로 모듈이 되지는 않습니다. **뿌리에서 선언해야
+파일을 만들었다고 자동으로 모듈이 되지는 않습니다. **루트에서 선언해야
 합니다.**
 
 ```rust
@@ -65,7 +65,7 @@ let id = NodeId::file("api", "a.rs");                   // use 가 있으면 짧
 
 | 접두 | 뜻 |
 |---|---|
-| `crate::` | 지금 크레이트의 뿌리부터 |
+| `crate::` | 지금 크레이트의 루트부터 |
 | `super::` | 한 단계 위 모듈 |
 | `self::` | 지금 모듈 |
 | 이름으로 시작 | 외부 크레이트 |
@@ -73,7 +73,7 @@ let id = NodeId::file("api", "a.rs");                   // use 가 있으면 짧
 ```rust
 // crates/nunchi-core/src/store/sqlite.rs 에서
 use super::{RankOpts, Ranked, SearchHit, Store};    // store/mod.rs 에서 가져옵니다
-use crate::model::*;                                 // 크레이트 뿌리에서 갑니다
+use crate::model::*;                                 // 크레이트 루트에서 갑니다
 use rusqlite::{params, Connection};                  // 외부 크레이트입니다
 ```
 
@@ -133,7 +133,7 @@ use nunchi_core::{index, lang, SqliteStore};
 서버와 CLI와 TUI가 같은 코드를 직접 부를 수 있습니다. 로직을 `main.rs`에
 두면 그렇게 할 수 없습니다.
 
-## 자주 쓰는 것을 뿌리에서 다시 내보냅니다
+## 자주 쓰는 것을 루트에서 다시 내보냅니다
 
 ```rust
 // crates/nunchi-core/src/lib.rs 에서
@@ -171,7 +171,7 @@ cargo test -p ex_07_01_b
 
 ## 정리
 
-파일이 곧 모듈이지만 뿌리에서 `mod`로 선언해야 포함됩니다. 디렉터리를 모듈로
+파일이 곧 모듈이지만 루트에서 `mod`로 선언해야 포함됩니다. 디렉터리를 모듈로
 만들려면 `mod.rs`를 둡니다.
 
 `pub`이 없으면 밖에서 쓸 수 없으며, 타입과 필드에 각각 붙여야 합니다. 공개

@@ -58,7 +58,7 @@ pub struct Config {
 설정 파일에 `[solution]`만 있어도 읽힙니다. 나머지는 기본값으로 채워집니다.
 
 `solution`에는 `default`가 없습니다. 저장소 경로는 기본값을 만들 수 없으므로
-반드시 있어야 합니다. 없으면 파싱이 실패하고 그것이 맞습니다.
+반드시 있어야 합니다. 없으면 파싱이 실패하며, 그것이 의도한 동작입니다.
 
 ### 기본값을 함수로 지정합니다
 
@@ -108,7 +108,7 @@ pub fn load(path: &Path) -> Result<Self> {
 **둘째, 공용 파일이 있는지 봅니다.** `if shared_path.is_file()`이므로 없어도
 됩니다. 공용 파일은 선택입니다.
 
-**셋째, 덮어씁니다.** `apply_shared`가 값을 갈아 끼웁니다.
+**셋째, 덮어씁니다.** `apply_shared`가 값을 교체합니다.
 
 `let mut config`에 `mut`이 붙은 이유는 아래에서 `apply_shared`가 값을 바꾸기
 때문입니다([0.2장](../rust/00-2-variables.md)).
@@ -149,7 +149,7 @@ fn apply_shared(&mut self, shared: SharedConfig) {
 `if let Some(v) = ...`은 [3.2장](../rust/03-2-if-let.md)에서 다룬 문법입니다.
 "값이 있을 때만 안쪽을 실행한다"는 뜻입니다.
 
-### 경로가 새어 나가지 않게 합니다
+### 경로가 공용 파일에 들어가지 않게 합니다
 
 ```rust
 pub fn to_shared(&self) -> SharedConfig {

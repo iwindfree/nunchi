@@ -132,7 +132,7 @@ let walker = ignore::WalkBuilder::new(root)
 [1.4장](01-4-clone.md)에서 미뤄 둔 설명을 여기서 합니다.
 
 `filter_entry`에 넘긴 클로저는 **`walker` 안에 저장됩니다.** 그리고 아래
-`for entry in walker` 반복이 도는 내내 살아 있어야 합니다.
+`for entry in walker` 반복이 진행되는 내내 살아 있어야 합니다.
 
 빌려서 가져갔다면 컴파일러가 거부합니다. 클로저가 `walker` 안에 들어가는데,
 빌린 대상인 `root`와 `excludes`가 언제까지 살아 있는지 보장할 수 없기

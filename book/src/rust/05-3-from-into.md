@@ -26,7 +26,7 @@ let id = NodeId::from("file:api/A.java");
 
 ## `Into`는 자동으로 따라옵니다
 
-`From`을 구현하면 `Into`가 공짜로 생깁니다. 방향만 반대입니다.
+`From`을 구현하면 `Into`가 자동으로 생깁니다. 방향만 반대입니다.
 
 ```rust
 let id: NodeId = "file:api/A.java".into();
