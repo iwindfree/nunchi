@@ -330,7 +330,7 @@ receivers = ["our_app", "svc"]    # 이 수신자에서만 라우트로 판정�
 
 Grep이나 Glob으로 훑기 전에 `nunchi_pack`을 먼저 호출한다.
 반환값은 답이 아니라 좌표(`path:line`)이므로 지목된 범위만 Read한다.
-`stale` 필드에 나타난 항목은 인덱스가 낡았다는 뜻이니 직접 Read한다.
+`stale` 필드에 나타난 항목은 인덱스가 실제 코드보다 오래되었다는 뜻이니 직접 Read한다.
 ```
 
 여러 질의를 묶어야 할 때는 MCP 대신 CLI를 사용하십시오. 스키마 비용이 들지
@@ -352,6 +352,6 @@ nunchi pack "$TASK" --json && nunchi find "OrderService" --json
 | 팩에 엉뚱한 파일이 나옵니다 | `exclude` 패턴을 확인하십시오. 생성된 코드가 들어왔을 가능성이 높습니다 |
 | 호출 엣지가 거의 없습니다 | `nunchi doctor`의 미해소 상위 목록을 확인하고 프레임워크 규칙을 추가하십시오 |
 | 한국어 질의가 결과를 내지 못합니다 | `[semantic.terms]`에 용어 대응을 추가하십시오 |
-| 팩 결과가 낡았습니다 | `stale` 필드를 확인하십시오. `nunchi index --watch`를 실행하거나 다시 인덱싱하십시오 |
+| 팩 결과가 실제 코드와 다릅니다 | `stale` 필드를 확인하십시오. `nunchi index --watch`를 실행하거나 다시 인덱싱하십시오 |
 | 지운 파일이 계속 나옵니다 | `nunchi index`가 자동으로 정리합니다. 그래도 남으면 `--rebuild`를 실행하십시오 |
 | 캐시 적중률이 계속 0%입니다 | Windows에서 `core.autocrlf` 설정 때문일 수 있습니다 |
