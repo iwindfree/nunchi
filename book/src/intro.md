@@ -11,19 +11,19 @@
 
 ## 책을 보는 방법
 
-이 책은 mdBook으로 만들었습니다. 다이어그램을 그리려면 전처리기가 하나 더
-필요합니다.
+이 책은 mdBook으로 만들었습니다.
 
 ```bash
-cargo install mdbook mdbook-mermaid
+cargo install mdbook
 cd book && mdbook serve --open
 ```
 
 브라우저가 열리고 사이드바 목차와 전문 검색을 쓸 수 있습니다.
 
-전처리기를 설치하지 않으면 `mdbook build`가 실패합니다. GitHub에서 파일을
-직접 읽으셔도 되지만, 그 경우 다이어그램은 코드로 보이고 검색을 쓸 수
-없습니다.
+다이어그램은 mermaid로 그렸는데, 별도 도구가 필요하지 않습니다. 브라우저에서
+그리도록 만들어 두었기 때문입니다. GitHub에서 파일을 직접 읽으셔도 그림이
+보입니다. GitHub이 mermaid를 자체적으로 그려 주기 때문입니다. 다만 그 경우
+검색과 목차는 쓸 수 없습니다.
 
 ## 읽는 순서
 

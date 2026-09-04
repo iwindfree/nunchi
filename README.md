@@ -77,7 +77,7 @@ Rust 문법 28장과 nunchi 코드 설명 12장, 연습문제 57개로 이루어
 `book/`에 있습니다. Rust를 처음 접하는 사람도 읽을 수 있게 썼습니다.
 
 ```bash
-cargo install mdbook mdbook-mermaid
+cargo install mdbook
 cd book && mdbook serve --open
 ```
 

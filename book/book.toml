@@ -22,7 +22,3 @@ limit-results = 20
 [output.html.playground]
 editable = false
 
-[preprocessor]
-
-[preprocessor.mermaid]
-command = "mdbook-mermaid"
