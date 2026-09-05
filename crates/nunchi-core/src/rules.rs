@@ -140,25 +140,25 @@ pub struct PersistenceRule {
     pub repository_supertypes: Vec<String>,
 }
 
-/// Built-in default rules, defined in `rules/builtin.toml`.
+/// 내장 기본 규칙. 정의는 `rules/builtin.toml`에 있다.
+/// 설정이 비어 있어도 Spring + React가 바로 동작한다.
 ///
-/// These make Spring and React work out of the box with an empty config.
+/// Rust 코드가 아니라 데이터 파일에 둔 이유가 있다. 규칙을 하나 더하는 일은
+/// "이 어노테이션은 이 HTTP 메서드다"라는 사실을 적는 것뿐인데, 코드로 두면
+/// `String` 변환과 `Vec` 생성 관용구를 알아야 한다. 프레임워크를 아는 사람이
+/// Rust를 몰라서 기여하지 못할 이유가 없다.
 ///
-/// The rules live in a data file rather than in Rust source on purpose. Adding a
-/// rule only states a fact — "this annotation means this HTTP method" — but in
-/// code that fact needs `String` conversions and `Vec` construction idioms.
-/// Someone who knows the framework should not be blocked by not knowing Rust.
+/// `include_str!`이 컴파일 시점에 파일 내용을 넣으므로 배포물은 여전히
+/// 실행 파일 하나다. tree-sitter 쿼리를 `queries/*.scm`에 둔 것과 같다.
 ///
-/// `include_str!` embeds the file at compile time, so the artifact is still a
-/// single executable. Same approach as the tree-sitter queries in `queries/*.scm`.
+/// # 패닉
 ///
-/// # Panics
-///
-/// A malformed file aborts at startup. That beats running with silently broken
-/// defaults, and `builtin_rules_parse` catches it during `cargo test` first.
+/// 파일이 잘못되면 시작과 동시에 멈춘다. 잘못된 기본 규칙으로 조용히
+/// 동작하는 것보다 낫고, `builtin_rules_parse` 테스트가 `cargo test`
+/// 단계에서 먼저 잡는다.
 pub fn builtin() -> FrameworkRules {
     toml::from_str(include_str!("../rules/builtin.toml"))
-        .expect("failed to parse rules/builtin.toml — the built-in rule file is malformed")
+        .expect("rules/builtin.toml 파싱 실패 — 내장 규칙 파일이 깨졌다")
 }
 
 impl FrameworkRules {
@@ -246,28 +246,28 @@ mod tests {
 
     #[test]
     fn builtin_rules_parse() {
-        // The defaults live in a TOML file, so a typo in a field name is not a
-        // compile error. This test is what turns it back into one.
+        // 기본값이 TOML 파일에 있으므로 필드 이름을 잘못 적어도 컴파일 오류가
+        // 나지 않는다. 이 테스트가 그것을 다시 컴파일 단계의 오류로 만든다.
         let r = builtin();
-        assert!(!r.route.is_empty(), "no route rules parsed");
-        assert!(!r.bean.is_empty(), "no bean rules parsed");
-        assert!(!r.inject.is_empty(), "no inject rules parsed");
-        assert!(!r.http_client.is_empty(), "no http_client rules parsed");
-        assert!(!r.persistence.is_empty(), "no persistence rules parsed");
-        assert!(!r.base_path.is_empty(), "no base_path rules parsed");
+        assert!(!r.route.is_empty(), "route 규칙을 읽지 못했다");
+        assert!(!r.bean.is_empty(), "bean 규칙을 읽지 못했다");
+        assert!(!r.inject.is_empty(), "inject 규칙을 읽지 못했다");
+        assert!(!r.http_client.is_empty(), "http_client 규칙을 읽지 못했다");
+        assert!(!r.persistence.is_empty(), "persistence 규칙을 읽지 못했다");
+        assert!(!r.base_path.is_empty(), "base_path 규칙을 읽지 못했다");
         assert!(
             !r.replace_defaults,
-            "built-in rules must never set replace_defaults"
+            "내장 규칙은 replace_defaults를 켜서는 안 된다"
         );
     }
 
     #[test]
     fn builtin_survives_a_serialization_round_trip() {
-        // `nunchi rules --toml` prints these rules and users paste the output into
-        // their own config. Serializing and reading it back must not lose anything.
+        // `nunchi rules --toml`이 이 규칙을 출력하고 사용자가 그것을 자기 설정에
+        // 붙여 넣는다. 직렬화했다가 다시 읽어도 잃는 것이 없어야 한다.
         let original = builtin();
-        let text = toml::to_string_pretty(&original).expect("serialize");
-        let parsed: FrameworkRules = toml::from_str(&text).expect("parse back");
+        let text = toml::to_string_pretty(&original).expect("직렬화 실패");
+        let parsed: FrameworkRules = toml::from_str(&text).expect("역직렬화 실패");
         assert_eq!(original.route.len(), parsed.route.len());
         assert_eq!(original.http_client.len(), parsed.http_client.len());
         assert_eq!(original.persistence.len(), parsed.persistence.len());
