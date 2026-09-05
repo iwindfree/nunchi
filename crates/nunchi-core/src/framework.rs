@@ -634,85 +634,6 @@ pub fn tables_in_sql(sql: &str) -> Vec<(String, String)> {
 
 // ─────────────────────────── HTTP 클라이언트 호출 ───────────────────────────
 
-/// 언어마다 구문 트리의 노드 이름이 다르므로 표로 둔다.
-/// 예를 들어 호출식은 TypeScript에서 `call_expression`이지만 Python은 `call`,
-/// Java는 `method_invocation`, C#은 `invocation_expression`이다.
-struct CallSyntax {
-    /// 호출식 노드 이름
-    call: &'static [&'static str],
-    /// 수신자와 메서드 이름을 담은 노드 이름
-    member: &'static [&'static str],
-    /// 수신자를 가리키는 필드 이름
-    receiver_field: &'static str,
-    /// 메서드 이름을 가리키는 필드 이름
-    method_field: &'static str,
-    /// 문자열 리터럴 노드 이름
-    string: &'static [&'static str],
-    /// 람다와 함수 리터럴 노드 이름. 인자에 있으면 핸들러 등록으로 본다.
-    lambda: &'static [&'static str],
-    /// 실인자를 한 겹 더 감싸는 노드가 있으면 그 이름. C#의 `argument`가 그렇다.
-    arg_wrapper: Option<&'static str>,
-    /// 호출식 자체가 수신자와 메서드 필드를 갖는가.
-    /// Java의 `method_invocation`은 `function` 필드 없이 `object`와 `name`을 직접 갖는다.
-    member_is_call: bool,
-}
-
-fn call_syntax(lang: &str) -> Option<CallSyntax> {
-    Some(match lang {
-        "typescript" | "javascript" => CallSyntax {
-            call: &["call_expression"],
-            member: &["member_expression"],
-            receiver_field: "object",
-            method_field: "property",
-            string: &["string", "template_string"],
-            lambda: &[
-                "arrow_function",
-                "function_expression",
-                "function",
-                "function_declaration",
-            ],
-            arg_wrapper: None,
-            member_is_call: false,
-        },
-        "python" => CallSyntax {
-            call: &["call"],
-            member: &["attribute"],
-            receiver_field: "object",
-            method_field: "attribute",
-            string: &["string", "concatenated_string"],
-            lambda: &["lambda"],
-            arg_wrapper: None,
-            member_is_call: false,
-        },
-        "java" => CallSyntax {
-            call: &["method_invocation"],
-            member: &["method_invocation"],
-            receiver_field: "object",
-            method_field: "name",
-            string: &["string_literal"],
-            lambda: &["lambda_expression"],
-            arg_wrapper: None,
-            member_is_call: true,
-        },
-        "csharp" => CallSyntax {
-            call: &["invocation_expression"],
-            member: &["member_access_expression"],
-            receiver_field: "expression",
-            method_field: "name",
-            string: &[
-                "string_literal",
-                "verbatim_string_literal",
-                "interpolated_string_expression",
-                "raw_string_literal",
-            ],
-            lambda: &["lambda_expression", "anonymous_method_expression"],
-            arg_wrapper: Some("argument"),
-            member_is_call: false,
-        },
-        _ => return None,
-    })
-}
-
 /// `fetch("/api/x")`, `axios.get("/api/x")`, `restTemplate.getForObject("/api/x", ...)`를
 /// 잡는다. 이것이 `CALLS_API` 엣지의 부르는 쪽 끝이다.
 ///
@@ -729,7 +650,7 @@ pub fn extract_api_calls(
     if clients.is_empty() {
         return out;
     }
-    let Some(syntax) = call_syntax(lang) else {
+    let Some(syntax) = rules.lang_syntax(lang) else {
         return out;
     };
     walk_calls(root, src, &clients, &syntax, &mut out);
@@ -740,10 +661,10 @@ fn walk_calls(
     node: Node,
     src: &[u8],
     clients: &[&crate::rules::HttpClientRule],
-    syntax: &CallSyntax,
+    syntax: &crate::rules::LangSyntax,
     out: &mut Vec<ApiCallFact>,
 ) {
-    if syntax.call.contains(&node.kind()) {
+    if syntax.call.iter().any(|k| k == node.kind()) {
         if let Some(fact) = api_call_of(node, src, clients, syntax) {
             out.push(fact);
         }
@@ -756,19 +677,19 @@ fn walk_calls(
 
 /// 호출 대상을 수신자와 메서드 이름으로 나눈다.
 /// `fetch(...)`처럼 수신자가 없으면 첫 값이 `None`이다.
-fn callee_of(call: Node, src: &[u8], syntax: &CallSyntax) -> Option<(Option<String>, String)> {
+fn callee_of(call: Node, src: &[u8], syntax: &crate::rules::LangSyntax) -> Option<(Option<String>, String)> {
     let member = if syntax.member_is_call {
         call
     } else {
         let func = call.child_by_field_name("function")?;
-        if !syntax.member.contains(&func.kind()) {
+        if !syntax.member.iter().any(|k| k == func.kind()) {
             return Some((None, text(func, src).to_string()));
         }
         func
     };
-    let name = member.child_by_field_name(syntax.method_field)?;
+    let name = member.child_by_field_name(&syntax.method_field)?;
     let receiver = member
-        .child_by_field_name(syntax.receiver_field)
+        .child_by_field_name(&syntax.receiver_field)
         .map(|r| text(r, src).to_string());
     Some((receiver, text(name, src).to_string()))
 }
@@ -777,7 +698,7 @@ fn api_call_of(
     call: Node,
     src: &[u8],
     clients: &[&crate::rules::HttpClientRule],
-    syntax: &CallSyntax,
+    syntax: &crate::rules::LangSyntax,
 ) -> Option<ApiCallFact> {
     let (receiver, callee) = callee_of(call, src, syntax)?;
 
@@ -839,21 +760,21 @@ fn api_call_of(
 }
 
 /// C#처럼 실인자가 한 겹 감싸여 있으면 안쪽 노드를 꺼낸다.
-fn unwrap_argument<'a>(arg: Node<'a>, syntax: &CallSyntax) -> Node<'a> {
-    match syntax.arg_wrapper {
+fn unwrap_argument<'a>(arg: Node<'a>, syntax: &crate::rules::LangSyntax) -> Node<'a> {
+    match syntax.arg_wrapper.as_deref() {
         Some(wrapper) if arg.kind() == wrapper => arg.named_child(0).unwrap_or(arg),
         _ => arg,
     }
 }
 
-fn has_function_argument(args: Node, syntax: &CallSyntax) -> bool {
+fn has_function_argument(args: Node, syntax: &crate::rules::LangSyntax) -> bool {
     let mut cursor = args.walk();
     args.children(&mut cursor)
-        .any(|a| syntax.lambda.contains(&unwrap_argument(a, syntax).kind()))
+        .any(|a| syntax.lambda.iter().any(|k| k == unwrap_argument(a, syntax).kind()))
 }
 
 /// `index`번째 실인자에서 URL 문자열을 뽑는다.
-fn url_argument_at(args: Node, src: &[u8], index: usize, syntax: &CallSyntax) -> Option<String> {
+fn url_argument_at(args: Node, src: &[u8], index: usize, syntax: &crate::rules::LangSyntax) -> Option<String> {
     let mut cursor = args.walk();
     let mut position = 0usize;
     for arg in args.children(&mut cursor) {
@@ -874,13 +795,13 @@ fn url_argument_at(args: Node, src: &[u8], index: usize, syntax: &CallSyntax) ->
 /// 그 리터럴이 슬래시로 끝나면 세그먼트 하나가 통째로 치환되는 형태이므로
 /// `{}`를 붙여 라우트와 맞춘다. 그렇지 않으면 어떤 경로가 되는지 알 수 없으므로
 /// `${}`를 붙여 동적으로 표시한다.
-fn literal_url(node: Node, src: &[u8], syntax: &CallSyntax) -> Option<String> {
-    if syntax.string.contains(&node.kind()) {
+fn literal_url(node: Node, src: &[u8], syntax: &crate::rules::LangSyntax) -> Option<String> {
+    if syntax.string.iter().any(|k| k == node.kind()) {
         return Some(strip_string_affixes(text(node, src)));
     }
     if node.kind() == "binary_expression" {
         let left = node.child_by_field_name("left")?;
-        if syntax.string.contains(&left.kind()) {
+        if syntax.string.iter().any(|k| k == left.kind()) {
             let head = strip_string_affixes(text(left, src));
             return Some(if head.ends_with('/') {
                 format!("{head}{{}}")

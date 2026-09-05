@@ -1,0 +1,37 @@
+# TypeScript · JavaScript — 프런트엔드 HTTP 클라이언트
+#
+# 라우트를 정의하는 규칙은 없다. Express나 NestJS를 쓴다면
+# 설정 파일에 추가하면 된다.
+#
+# `lang = "typescript"`로 적은 규칙은 JavaScript 파일에도 적용된다.
+#
+# 이 파일은 `builtin.<언어>.toml` 묶음의 하나다. 전체 구성은
+# `builtin.syntax.toml`의 머리말에 적어 두었다.
+
+[[http_client]]
+lang = "typescript"
+callee = "fetch"
+receiver_methods = []
+method = "GET"
+url_arg = 0
+exclude_receivers = []
+
+[[http_client]]
+lang = "typescript"
+receiver_methods = [
+    "get",
+    "post",
+    "put",
+    "delete",
+    "patch",
+    "head",
+    "options",
+]
+url_arg = 0
+exclude_receivers = [
+    "this",
+    "app",
+    "router",
+    "server",
+    "mock",
+]

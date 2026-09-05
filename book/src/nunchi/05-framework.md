@@ -185,8 +185,9 @@ method = "POST"
 이 틀에 Spring, NestJS, Micronaut, ASP.NET, Ktor, FastAPI, Flask가 모두
 들어갑니다.
 
-내장 기본 규칙도 Rust 코드가 아니라 `crates/nunchi-core/rules/builtin.toml`에
-있습니다. `include_str!`이 컴파일 시점에 넣으므로 배포물은 여전히 실행 파일
+내장 기본 규칙도 Rust 코드가 아니라 `crates/nunchi-core/rules/`의 TOML
+파일들에 있습니다. 언어별로 나뉘어 있어서 새 언어를 지원할 때 한 파일만
+보면 됩니다. `include_str!`이 컴파일 시점에 넣으므로 배포물은 여전히 실행 파일
 하나입니다. 앞 장의 tree-sitter 쿼리를 `.scm` 파일에 둔 것과 같은 방식입니다.
 
 처음에는 Rust 코드였는데 이렇게 옮겼습니다. 규칙 하나를 더하는 일은 "이
@@ -371,18 +372,21 @@ TypeScript에서는 잘 동작했습니다. 그런데 Python과 C# 규칙을 설
 
 그래서 언어별 이름을 표로 만들었습니다.
 
-```rust
-struct CallSyntax {
-    call: &'static [&'static str],
-    member: &'static [&'static str],
-    receiver_field: &'static str,
-    method_field: &'static str,
-    string: &'static [&'static str],
-    lambda: &'static [&'static str],
-    arg_wrapper: Option<&'static str>,
-    member_is_call: bool,
-}
+```toml
+[[lang_syntax]]
+lang = "java"
+call = ["method_invocation"]
+member = ["method_invocation"]
+receiver_field = "object"
+method_field = "name"
+string = ["string_literal"]
+lambda = ["lambda_expression"]
+member_is_call = true
 ```
+
+이 표도 처음에는 Rust 코드였는데 `rules/builtin.syntax.toml`로 옮겼습니다.
+프레임워크 규칙과 마찬가지로 절차가 아니라 값이기 때문입니다. **규칙 파일에는
+값만 두고 코드에는 절차만 둔다**는 경계가 이렇게 생겼습니다.
 
 **이 결함이 오래 남아 있던 이유**가 중요합니다. `nunchi rules`를 실행하면
 Python과 C# 규칙이 목록에 나옵니다. 규칙이 등록되어 있으니 동작한다고

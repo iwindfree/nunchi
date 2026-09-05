@@ -1,0 +1,118 @@
+# Python — FastAPI, Flask, SQLAlchemy
+#
+# 데코레이터에 수신자가 붙는 형태라 `receivers` 목록이 필요하다.
+# 그것이 없으면 `@cache.get` 같은 것이 라우트로 잡힌다.
+#
+# 이 파일은 `builtin.<언어>.toml` 묶음의 하나다. 전체 구성은
+# `builtin.syntax.toml`의 머리말에 적어 두었다.
+
+# FastAPI `@app.get("/x")` · Flask `@app.route("/x", methods=["POST"])`
+# 파이썬 데코레이터는 수신자가 붙으므로, `receivers`로 `@cache.get` 오탐을 막는다.
+[[route]]
+lang = "python"
+annotation = "get"
+method = "GET"
+receivers = [
+    "app",
+    "router",
+    "api",
+    "blueprint",
+    "bp",
+]
+
+[[route]]
+lang = "python"
+annotation = "post"
+method = "POST"
+receivers = [
+    "app",
+    "router",
+    "api",
+    "blueprint",
+    "bp",
+]
+
+[[route]]
+lang = "python"
+annotation = "put"
+method = "PUT"
+receivers = [
+    "app",
+    "router",
+    "api",
+    "blueprint",
+    "bp",
+]
+
+[[route]]
+lang = "python"
+annotation = "delete"
+method = "DELETE"
+receivers = [
+    "app",
+    "router",
+    "api",
+    "blueprint",
+    "bp",
+]
+
+[[route]]
+lang = "python"
+annotation = "patch"
+method = "PATCH"
+receivers = [
+    "app",
+    "router",
+    "api",
+    "blueprint",
+    "bp",
+]
+
+# Flask는 `methods=["POST"]`로 HTTP 메서드를 지정한다.
+[[route]]
+lang = "python"
+annotation = "route"
+method = "ANY"
+receivers = [
+    "app",
+    "router",
+    "api",
+    "blueprint",
+    "bp",
+]
+method_from_args_list = "methods"
+
+
+
+# requests · httpx · aiohttp — 파이썬 HTTP 클라이언트
+# app·router는 라우트 정의다. cache·redis는 HTTP가 아니다. session은
+# `session.get(url)`이 실제 클라이언트 호출이므로 제외하지 않는다.
+[[http_client]]
+lang = "python"
+receiver_methods = [
+    "get",
+    "post",
+    "put",
+    "delete",
+    "patch",
+]
+url_arg = 0
+exclude_receivers = [
+    "app",
+    "router",
+    "blueprint",
+    "bp",
+    "cache",
+    "redis",
+]
+
+
+
+# SQLAlchemy
+[[persistence]]
+lang = "python"
+entity_annotations = []
+table_annotations = []
+sql_annotations = []
+table_attribute = "__tablename__"
+repository_supertypes = []

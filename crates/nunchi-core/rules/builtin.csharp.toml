@@ -1,0 +1,76 @@
+# C# — ASP.NET, HttpClient
+#
+# WinForms 쪽은 라우트가 없고 심볼 추출만 동작한다.
+#
+# 이 파일은 `builtin.<언어>.toml` 묶음의 하나다. 전체 구성은
+# `builtin.syntax.toml`의 머리말에 적어 두었다.
+
+# ASP.NET `[HttpGet("orders")]`
+[[route]]
+lang = "csharp"
+annotation = "HttpGet"
+method = "GET"
+receivers = []
+
+[[route]]
+lang = "csharp"
+annotation = "HttpPost"
+method = "POST"
+receivers = []
+
+[[route]]
+lang = "csharp"
+annotation = "HttpPut"
+method = "PUT"
+receivers = []
+
+[[route]]
+lang = "csharp"
+annotation = "HttpDelete"
+method = "DELETE"
+receivers = []
+
+[[route]]
+lang = "csharp"
+annotation = "HttpPatch"
+method = "PATCH"
+receivers = []
+
+
+
+# ASP.NET `[Route("api/[controller]")]`
+[[base_path]]
+lang = "csharp"
+annotation = "Route"
+
+
+
+[[bean]]
+lang = "csharp"
+annotations = [
+    "ApiController",
+    "Controller",
+]
+
+
+
+# 자체 DAO의 `delete(경로문자열)`은 URL 판별에서도 걸러지지만 여기서 먼저 막는다.
+exclude_receivers = [
+    "repository",
+    "repo",
+    "dao",
+    "mapper",
+]
+
+# C# HttpClient
+[[http_client]]
+lang = "csharp"
+receiver_methods = [
+    "GetAsync",
+    "PostAsync",
+    "PutAsync",
+    "DeleteAsync",
+    "PatchAsync",
+]
+url_arg = 0
+exclude_receivers = []

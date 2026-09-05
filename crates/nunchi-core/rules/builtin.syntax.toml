@@ -1,0 +1,104 @@
+# 언어별 구문 트리 노드 이름
+#
+# tree-sitter는 언어마다 문법 정의를 따로 만들었고, 작성자들이 각자 자기 언어
+# 명세의 용어를 그대로 썼다. 그래서 같은 뜻인데 이름이 다르다. 메서드 호출이
+# TypeScript에서는 `call_expression`이지만 Python은 `call`, Java는
+# `method_invocation`, C#은 `invocation_expression`이다.
+#
+# 이름만이 아니라 구조도 다르다. TypeScript는 `function` 필드 아래에 수신자와
+# 메서드가 있는데 Java는 호출식 자체가 `object`와 `name`을 직접 갖는다.
+# C#은 실인자가 `argument` 노드로 한 겹 더 감싸여 있다.
+#
+# 이 차이를 놓치면 오류 없이 결과만 빈다. 실제로 Python과 C#의 HTTP 클라이언트
+# 규칙이 등록되어 있는데도 한 건도 탐지되지 않은 적이 있다.
+#
+# 노드 이름을 알아내려면 해당 문법 크레이트의 `grammar.js`를 읽거나, 짧은
+# 코드를 파싱해서 트리를 출력해 보면 된다.
+#
+# ── 규칙 파일 구성 ─────────────────────────────────────────────────
+#
+#   builtin.syntax.toml       이 파일. 언어 문법에 종속된 노드 이름
+#   builtin.java.toml         Java — Spring, JPA, MyBatis
+#   builtin.python.toml       Python — FastAPI, Flask, SQLAlchemy
+#   builtin.typescript.toml   TypeScript · JavaScript
+#   builtin.csharp.toml       C# — ASP.NET, HttpClient
+#
+# 전부 `include_str!`로 컴파일 시점에 바이너리에 들어가므로 배포물은 여전히
+# 실행 파일 하나다. 언어를 추가할 때는 이 파일에 `[[lang_syntax]]`를 넣고
+# `builtin.<언어>.toml`을 새로 만든다.
+
+# ── TypeScript · JavaScript ────────────────────────────────────────
+# JavaScript는 TypeScript 파서로 읽으므로 문법이 같다.
+[[lang_syntax]]
+lang = "typescript"
+call = ["call_expression"]
+member = ["member_expression"]
+receiver_field = "object"
+method_field = "property"
+string = ["string", "template_string"]
+lambda = [
+    "arrow_function",
+    "function_expression",
+    "function",
+    "function_declaration",
+]
+member_is_call = false
+
+[[lang_syntax]]
+lang = "javascript"
+call = ["call_expression"]
+member = ["member_expression"]
+receiver_field = "object"
+method_field = "property"
+string = ["string", "template_string"]
+lambda = [
+    "arrow_function",
+    "function_expression",
+    "function",
+    "function_declaration",
+]
+member_is_call = false
+
+# ── Python ────────────────────────────────────────────────────────
+# f-문자열도 `string` 노드다. 접두 `f`는 값을 읽을 때 벗긴다.
+[[lang_syntax]]
+lang = "python"
+call = ["call"]
+member = ["attribute"]
+receiver_field = "object"
+method_field = "attribute"
+string = ["string", "concatenated_string"]
+lambda = ["lambda"]
+member_is_call = false
+
+# ── Java ──────────────────────────────────────────────────────────
+# `method_invocation`이 `object`와 `name` 필드를 직접 갖는다. 그래서 수신자와
+# 메서드를 담은 별도 노드가 없고 `member_is_call`이 참이다.
+[[lang_syntax]]
+lang = "java"
+call = ["method_invocation"]
+member = ["method_invocation"]
+receiver_field = "object"
+method_field = "name"
+string = ["string_literal"]
+lambda = ["lambda_expression"]
+member_is_call = true
+
+# ── C# ────────────────────────────────────────────────────────────
+# 실인자가 `argument` 노드로 한 겹 감싸여 있어 `arg_wrapper`가 필요하다.
+# 보간 문자열 `$"..."`과 축자 문자열 `@"..."`도 함께 읽는다.
+[[lang_syntax]]
+lang = "csharp"
+call = ["invocation_expression"]
+member = ["member_access_expression"]
+receiver_field = "expression"
+method_field = "name"
+string = [
+    "string_literal",
+    "verbatim_string_literal",
+    "interpolated_string_expression",
+    "raw_string_literal",
+]
+lambda = ["lambda_expression", "anonymous_method_expression"]
+arg_wrapper = "argument"
+member_is_call = false

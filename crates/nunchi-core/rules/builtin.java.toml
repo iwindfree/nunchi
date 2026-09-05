@@ -1,0 +1,135 @@
+# Java — Spring, JPA, MyBatis
+#
+# Spring Boot 백엔드가 주 대상이다. MyBatis는 한국 기업 환경에서
+# 비중이 커서 JPA와 함께 다룬다.
+#
+# 이 파일은 `builtin.<언어>.toml` 묶음의 하나다. 전체 구성은
+# `builtin.syntax.toml`의 머리말에 적어 두었다.
+
+[[route]]
+lang = "java"
+annotation = "GetMapping"
+method = "GET"
+receivers = []
+
+[[route]]
+lang = "java"
+annotation = "PostMapping"
+method = "POST"
+receivers = []
+
+[[route]]
+lang = "java"
+annotation = "PutMapping"
+method = "PUT"
+receivers = []
+
+[[route]]
+lang = "java"
+annotation = "DeleteMapping"
+method = "DELETE"
+receivers = []
+
+[[route]]
+lang = "java"
+annotation = "PatchMapping"
+method = "PATCH"
+receivers = []
+
+[[route]]
+lang = "java"
+annotation = "RequestMapping"
+method = "ANY"
+method_from_args_prefix = "RequestMethod."
+receivers = []
+
+
+
+[[base_path]]
+lang = "java"
+annotation = "RequestMapping"
+
+
+
+[[bean]]
+lang = "java"
+annotations = [
+    "RestController",
+    "Controller",
+    "Service",
+    "Repository",
+    "Component",
+    "Configuration",
+]
+
+
+
+[[inject]]
+lang = "java"
+annotations = [
+    "Autowired",
+    "Inject",
+]
+final_fields = true
+constructor_params = true
+
+
+
+# Spring RestTemplate — 백엔드가 다른 서비스를 부르는 경로다.
+# 메서드 이름에 HTTP 동사가 드러나는 것만 넣는다. `put`은 `Map.put`이,
+# `get`은 `List.get`이 같은 이름이라 오탐이 커서 제외한다.
+# RestTemplate의 `put`·`exchange`가 필요하면 설정 파일에 추가하면 된다.
+[[http_client]]
+lang = "java"
+receiver_methods = [
+    "getForObject",
+    "getForEntity",
+]
+method = "GET"
+url_arg = 0
+exclude_receivers = []
+
+[[http_client]]
+lang = "java"
+receiver_methods = [
+    "postForObject",
+    "postForEntity",
+    "postForLocation",
+]
+method = "POST"
+url_arg = 0
+exclude_receivers = []
+
+[[http_client]]
+lang = "java"
+receiver_methods = ["patchForObject"]
+method = "PATCH"
+url_arg = 0
+exclude_receivers = []
+
+[[http_client]]
+lang = "java"
+receiver_methods = ["delete"]
+method = "DELETE"
+url_arg = 0
+
+
+
+# JPA와 MyBatis 어노테이션 매퍼 — MyBatis는 한국 기업 Spring 환경에서
+# 비중이 크므로 함께 다룬다.
+[[persistence]]
+lang = "java"
+entity_annotations = ["Entity"]
+table_annotations = ["Table"]
+sql_annotations = [
+    "Select",
+    "Insert",
+    "Update",
+    "Delete",
+    "SelectProvider",
+]
+repository_supertypes = [
+    "JpaRepository",
+    "CrudRepository",
+    "MongoRepository",
+]

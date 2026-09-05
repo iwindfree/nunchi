@@ -27,6 +27,10 @@ pub struct FrameworkRules {
     /// 영속 계층 — 엔티티·테이블·SQL 매퍼
     #[serde(default)]
     pub persistence: Vec<PersistenceRule>,
+    /// 언어별 구문 트리 노드 이름. 프레임워크 규칙이 아니라 언어 문법에
+    /// 종속된 값이므로 사용자가 건드릴 일이 거의 없다.
+    #[serde(default)]
+    pub lang_syntax: Vec<LangSyntax>,
 }
 
 impl Default for FrameworkRules {
@@ -39,8 +43,38 @@ impl Default for FrameworkRules {
             inject: Vec::new(),
             http_client: Vec::new(),
             persistence: Vec::new(),
+            lang_syntax: Vec::new(),
         }
     }
+}
+
+/// 한 언어의 구문 트리에서 호출식을 찾고 읽는 데 필요한 노드 이름들.
+///
+/// tree-sitter 문법이 언어마다 따로 만들어져서 같은 뜻인데 이름이 다르다.
+/// 메서드 호출이 TypeScript에서는 `call_expression`이지만 Java는
+/// `method_invocation`이다. 값은 `rules/builtin.syntax.toml`에 있다.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LangSyntax {
+    pub lang: String,
+    /// 호출식 노드 이름
+    pub call: Vec<String>,
+    /// 수신자와 메서드 이름을 담은 노드 이름
+    pub member: Vec<String>,
+    /// 수신자를 가리키는 필드 이름
+    pub receiver_field: String,
+    /// 메서드 이름을 가리키는 필드 이름
+    pub method_field: String,
+    /// 문자열 리터럴 노드 이름
+    pub string: Vec<String>,
+    /// 람다와 함수 리터럴 노드 이름. 인자에 있으면 핸들러 등록으로 본다.
+    pub lambda: Vec<String>,
+    /// 실인자를 한 겹 더 감싸는 노드가 있으면 그 이름. C#의 `argument`가 그렇다.
+    #[serde(default)]
+    pub arg_wrapper: Option<String>,
+    /// 호출식 자체가 수신자와 메서드 필드를 갖는가.
+    /// Java의 `method_invocation`은 `function` 필드 없이 둘을 직접 갖는다.
+    #[serde(default)]
+    pub member_is_call: bool,
 }
 
 /// 메서드 선언에 붙은 어노테이션이 HTTP 라우트를 정의한다.
@@ -140,7 +174,7 @@ pub struct PersistenceRule {
     pub repository_supertypes: Vec<String>,
 }
 
-/// 내장 기본 규칙. 정의는 `rules/builtin.toml`에 있다.
+/// 내장 기본 규칙. 정의는 `rules/builtin.*.toml`에 나뉘어 있다.
 /// 설정이 비어 있어도 Spring + React가 바로 동작한다.
 ///
 /// Rust 코드가 아니라 데이터 파일에 둔 이유가 있다. 규칙을 하나 더하는 일은
@@ -148,7 +182,8 @@ pub struct PersistenceRule {
 /// `String` 변환과 `Vec` 생성 관용구를 알아야 한다. 프레임워크를 아는 사람이
 /// Rust를 몰라서 기여하지 못할 이유가 없다.
 ///
-/// `include_str!`이 컴파일 시점에 파일 내용을 넣으므로 배포물은 여전히
+/// 파일을 언어별로 나눈 것은 새 언어를 지원할 때 한 파일만 보게 하기
+/// 위해서다. `include_str!`이 컴파일 시점에 내용을 넣으므로 배포물은 여전히
 /// 실행 파일 하나다. tree-sitter 쿼리를 `queries/*.scm`에 둔 것과 같다.
 ///
 /// # 패닉
@@ -157,8 +192,26 @@ pub struct PersistenceRule {
 /// 동작하는 것보다 낫고, `builtin_rules_parse` 테스트가 `cargo test`
 /// 단계에서 먼저 잡는다.
 pub fn builtin() -> FrameworkRules {
-    toml::from_str(include_str!("../rules/builtin.toml"))
-        .expect("rules/builtin.toml 파싱 실패 — 내장 규칙 파일이 깨졌다")
+    /// 언어를 추가할 때 여기에 한 줄을 더한다. 빠뜨리면 그 언어의 규칙이
+    /// 통째로 사라지므로 `builtin_covers_every_supported_language`가 잡는다.
+    const FILES: &[(&str, &str)] = &[
+        ("builtin.syntax.toml", include_str!("../rules/builtin.syntax.toml")),
+        ("builtin.java.toml", include_str!("../rules/builtin.java.toml")),
+        ("builtin.python.toml", include_str!("../rules/builtin.python.toml")),
+        (
+            "builtin.typescript.toml",
+            include_str!("../rules/builtin.typescript.toml"),
+        ),
+        ("builtin.csharp.toml", include_str!("../rules/builtin.csharp.toml")),
+    ];
+
+    let mut merged = FrameworkRules::default();
+    for (name, text) in FILES {
+        let part: FrameworkRules = toml::from_str(text)
+            .unwrap_or_else(|e| panic!("rules/{name} 파싱 실패 — 내장 규칙 파일이 깨졌다: {e}"));
+        merged.absorb(part);
+    }
+    merged
 }
 
 impl FrameworkRules {
@@ -168,13 +221,20 @@ impl FrameworkRules {
             return user.clone();
         }
         let mut merged = builtin();
-        merged.route.extend(user.route.iter().cloned());
-        merged.base_path.extend(user.base_path.iter().cloned());
-        merged.bean.extend(user.bean.iter().cloned());
-        merged.inject.extend(user.inject.iter().cloned());
-        merged.http_client.extend(user.http_client.iter().cloned());
-        merged.persistence.extend(user.persistence.iter().cloned());
+        merged.absorb(user.clone());
         merged
+    }
+
+    /// 다른 규칙 묶음을 뒤에 이어 붙인다. 앞에서부터 찾으므로 먼저 넣은
+    /// 규칙이 우선한다.
+    fn absorb(&mut self, other: FrameworkRules) {
+        self.route.extend(other.route);
+        self.base_path.extend(other.base_path);
+        self.bean.extend(other.bean);
+        self.inject.extend(other.inject);
+        self.http_client.extend(other.http_client);
+        self.persistence.extend(other.persistence);
+        self.lang_syntax.extend(other.lang_syntax);
     }
 
     /// `lang`은 추출기 언어(`java`, `typescript`)와 맞춘다.
@@ -232,6 +292,11 @@ impl FrameworkRules {
             .collect()
     }
 
+    /// 그 언어의 구문 트리 노드 이름. 없으면 호출 탐지를 하지 않는다.
+    pub fn lang_syntax(&self, lang: &str) -> Option<&LangSyntax> {
+        self.lang_syntax.iter().find(|s| s.lang == lang)
+    }
+
     pub fn http_clients(&self, lang: &str) -> Vec<&HttpClientRule> {
         self.http_client
             .iter()
@@ -245,6 +310,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn builtin_covers_every_supported_language() {
+        // 규칙 파일이 언어별로 나뉘어 있어서, `builtin()`의 FILES 목록에 한 줄을
+        // 빠뜨리면 그 언어의 규칙이 통째로 사라진다. 컴파일은 그대로 되므로
+        // 이 테스트가 대신 잡는다.
+        let r = builtin();
+        for lang in ["java", "python", "typescript", "csharp"] {
+            assert!(
+                r.lang_syntax(lang).is_some(),
+                "{lang}의 구문 트리 정의가 없다 — builtin.syntax.toml 확인"
+            );
+        }
+        // 각 언어 파일이 실제로 읽혔는지 대표 규칙 하나씩으로 확인한다.
+        assert!(r.route_for("java", "GetMapping").is_some(), "builtin.java.toml");
+        assert!(
+            r.route_for_receiver("python", "app", "get").is_some(),
+            "builtin.python.toml"
+        );
+        assert!(
+            !r.http_clients("typescript").is_empty(),
+            "builtin.typescript.toml"
+        );
+        assert!(r.route_for("csharp", "HttpGet").is_some(), "builtin.csharp.toml");
+    }
+
+    #[test]
     fn builtin_rules_parse() {
         // 기본값이 TOML 파일에 있으므로 필드 이름을 잘못 적어도 컴파일 오류가
         // 나지 않는다. 이 테스트가 그것을 다시 컴파일 단계의 오류로 만든다.
@@ -255,6 +345,7 @@ mod tests {
         assert!(!r.http_client.is_empty(), "http_client 규칙을 읽지 못했다");
         assert!(!r.persistence.is_empty(), "persistence 규칙을 읽지 못했다");
         assert!(!r.base_path.is_empty(), "base_path 규칙을 읽지 못했다");
+        assert!(!r.lang_syntax.is_empty(), "lang_syntax를 읽지 못했다");
         assert!(
             !r.replace_defaults,
             "내장 규칙은 replace_defaults를 켜서는 안 된다"

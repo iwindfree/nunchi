@@ -50,7 +50,12 @@ crates/
 │   ├── lang.rs                  확장자에서 언어를 판별합니다
 │   ├── config.rs                설정 파일 두 개를 읽고 병합합니다
 │   ├── rules.rs                 규칙의 타입 정의와 병합·조회
-│   ├── rules/builtin.toml       내장 기본 규칙 (여기에 추가합니다)
+│   ├── rules/                   내장 기본 규칙 (여기에 추가합니다)
+│   │   ├── builtin.syntax.toml      언어별 구문 트리 노드 이름
+│   │   ├── builtin.java.toml        Spring, JPA, MyBatis
+│   │   ├── builtin.python.toml      FastAPI, Flask, SQLAlchemy
+│   │   ├── builtin.typescript.toml  TypeScript · JavaScript
+│   │   └── builtin.csharp.toml      ASP.NET, HttpClient
 │   ├── semantic.rs              식별자 분해와 동의어 사전
 │   ├── extract.rs               tree-sitter로 심볼을 추출합니다
 │   ├── framework.rs             어노테이션과 데코레이터를 해석합니다
@@ -143,7 +148,7 @@ TUI가 같은 코어를 직접 호출하므로 로직이 중복되지 않습니�
 `nunchi.shared.toml`의 `[[framework.*]]`에 추가하시면 됩니다. 방법은
 [사용 안내서의 확장 절](GUIDE.md)에 정리해 두었습니다.
 
-**모두가 쓸 기본 규칙**이라면 `crates/nunchi-core/rules/builtin.toml`에
+**모두가 쓸 기본 규칙**이라면 `crates/nunchi-core/rules/builtin.<언어>.toml`에
 항목을 추가하고 `cargo test`를 실행하십시오. Rust 코드를 고칠 필요가
 없습니다.
 
@@ -168,8 +173,27 @@ receivers = []
 `builtin_rules_parse` 테스트가 그것을 대신 잡아 줍니다. tree-sitter 쿼리와
 `all_queries_compile`의 관계와 같습니다.
 
-기존 정형에 맞지 않는 새로운 형태가 필요할 때만 `rules.rs`에 규칙 종류를
-추가하고 `framework.rs`에 처리 코드를 넣습니다.
+### 새 언어를 지원할 때 규칙 쪽에서 할 일
+
+파일 두 개를 건드립니다.
+
+1. `rules/builtin.syntax.toml`에 `[[lang_syntax]]`를 추가합니다. 그 언어의
+   구문 트리에서 호출식과 문자열 리터럴이 무슨 이름인지 적는 자리입니다.
+   이름을 알아내려면 짧은 코드를 파싱해 트리를 출력해 보면 됩니다.
+2. `rules/builtin.<언어>.toml`을 새로 만들고 `builtin()`의 `FILES` 목록에
+   한 줄을 더합니다.
+
+목록에 넣는 것을 잊으면 그 언어의 규칙이 통째로 사라지는데 컴파일은
+그대로 됩니다. `builtin_covers_every_supported_language`가 그것을 잡습니다.
+
+### 값과 절차의 경계
+
+규칙 파일에는 **값**만 둡니다. 표에서 찾아보는 대상입니다. 트리를 훑고
+URL을 뽑아 정규화하는 **절차**는 `framework.rs`에 둡니다.
+
+이 경계를 지키면 새 프레임워크나 새 언어를 지원할 때 대부분 데이터만
+고치게 됩니다. 기존 정형에 맞지 않는 새로운 형태가 필요할 때만 `rules.rs`에
+규칙 종류를 추가하고 `framework.rs`에 처리 코드를 넣습니다.
 
 ### 랭킹을 조정할 때
 
