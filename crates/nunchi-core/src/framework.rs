@@ -632,10 +632,92 @@ pub fn tables_in_sql(sql: &str) -> Vec<(String, String)> {
     out
 }
 
-// ─────────────────────────── TypeScript / React ───────────────────────────
+// ─────────────────────────── HTTP 클라이언트 호출 ───────────────────────────
 
-/// `fetch("/api/x")`, `axios.get("/api/x")`, `api.post("/api/x", body)` 를 잡는다.
-/// 이것이 `CALLS_API` 엣지의 프런트 쪽 끝이다.
+/// 언어마다 구문 트리의 노드 이름이 다르므로 표로 둔다.
+/// 예를 들어 호출식은 TypeScript에서 `call_expression`이지만 Python은 `call`,
+/// Java는 `method_invocation`, C#은 `invocation_expression`이다.
+struct CallSyntax {
+    /// 호출식 노드 이름
+    call: &'static [&'static str],
+    /// 수신자와 메서드 이름을 담은 노드 이름
+    member: &'static [&'static str],
+    /// 수신자를 가리키는 필드 이름
+    receiver_field: &'static str,
+    /// 메서드 이름을 가리키는 필드 이름
+    method_field: &'static str,
+    /// 문자열 리터럴 노드 이름
+    string: &'static [&'static str],
+    /// 람다와 함수 리터럴 노드 이름. 인자에 있으면 핸들러 등록으로 본다.
+    lambda: &'static [&'static str],
+    /// 실인자를 한 겹 더 감싸는 노드가 있으면 그 이름. C#의 `argument`가 그렇다.
+    arg_wrapper: Option<&'static str>,
+    /// 호출식 자체가 수신자와 메서드 필드를 갖는가.
+    /// Java의 `method_invocation`은 `function` 필드 없이 `object`와 `name`을 직접 갖는다.
+    member_is_call: bool,
+}
+
+fn call_syntax(lang: &str) -> Option<CallSyntax> {
+    Some(match lang {
+        "typescript" | "javascript" => CallSyntax {
+            call: &["call_expression"],
+            member: &["member_expression"],
+            receiver_field: "object",
+            method_field: "property",
+            string: &["string", "template_string"],
+            lambda: &[
+                "arrow_function",
+                "function_expression",
+                "function",
+                "function_declaration",
+            ],
+            arg_wrapper: None,
+            member_is_call: false,
+        },
+        "python" => CallSyntax {
+            call: &["call"],
+            member: &["attribute"],
+            receiver_field: "object",
+            method_field: "attribute",
+            string: &["string", "concatenated_string"],
+            lambda: &["lambda"],
+            arg_wrapper: None,
+            member_is_call: false,
+        },
+        "java" => CallSyntax {
+            call: &["method_invocation"],
+            member: &["method_invocation"],
+            receiver_field: "object",
+            method_field: "name",
+            string: &["string_literal"],
+            lambda: &["lambda_expression"],
+            arg_wrapper: None,
+            member_is_call: true,
+        },
+        "csharp" => CallSyntax {
+            call: &["invocation_expression"],
+            member: &["member_access_expression"],
+            receiver_field: "expression",
+            method_field: "name",
+            string: &[
+                "string_literal",
+                "verbatim_string_literal",
+                "interpolated_string_expression",
+                "raw_string_literal",
+            ],
+            lambda: &["lambda_expression", "anonymous_method_expression"],
+            arg_wrapper: Some("argument"),
+            member_is_call: false,
+        },
+        _ => return None,
+    })
+}
+
+/// `fetch("/api/x")`, `axios.get("/api/x")`, `restTemplate.getForObject("/api/x", ...)`를
+/// 잡는다. 이것이 `CALLS_API` 엣지의 부르는 쪽 끝이다.
+///
+/// 프런트엔드만 HTTP를 부르는 것이 아니다. 백엔드도 다른 서비스나 외부 API를
+/// 부르므로 네 언어를 모두 지원한다.
 pub fn extract_api_calls(
     root: Node,
     src: &[u8],
@@ -647,47 +729,66 @@ pub fn extract_api_calls(
     if clients.is_empty() {
         return out;
     }
-    walk_ts(root, src, &clients, &mut out);
+    let Some(syntax) = call_syntax(lang) else {
+        return out;
+    };
+    walk_calls(root, src, &clients, &syntax, &mut out);
     out
 }
 
-fn walk_ts(
+fn walk_calls(
     node: Node,
     src: &[u8],
     clients: &[&crate::rules::HttpClientRule],
+    syntax: &CallSyntax,
     out: &mut Vec<ApiCallFact>,
 ) {
-    if node.kind() == "call_expression" {
-        if let Some(fact) = api_call_of(node, src, clients) {
+    if syntax.call.contains(&node.kind()) {
+        if let Some(fact) = api_call_of(node, src, clients, syntax) {
             out.push(fact);
         }
     }
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        walk_ts(child, src, clients, out);
+        walk_calls(child, src, clients, syntax, out);
     }
+}
+
+/// 호출 대상을 수신자와 메서드 이름으로 나눈다.
+/// `fetch(...)`처럼 수신자가 없으면 첫 값이 `None`이다.
+fn callee_of(call: Node, src: &[u8], syntax: &CallSyntax) -> Option<(Option<String>, String)> {
+    let member = if syntax.member_is_call {
+        call
+    } else {
+        let func = call.child_by_field_name("function")?;
+        if !syntax.member.contains(&func.kind()) {
+            return Some((None, text(func, src).to_string()));
+        }
+        func
+    };
+    let name = member.child_by_field_name(syntax.method_field)?;
+    let receiver = member
+        .child_by_field_name(syntax.receiver_field)
+        .map(|r| text(r, src).to_string());
+    Some((receiver, text(name, src).to_string()))
 }
 
 fn api_call_of(
     call: Node,
     src: &[u8],
     clients: &[&crate::rules::HttpClientRule],
+    syntax: &CallSyntax,
 ) -> Option<ApiCallFact> {
-    let func = call.child_by_field_name("function")?;
+    let (receiver, callee) = callee_of(call, src, syntax)?;
 
     // 어떤 규칙에 걸리는지 찾는다. 사내 래퍼도 설정에 추가하면 그대로 잡힌다.
-    let (method, url_arg) = clients.iter().find_map(|rule| -> Option<(String, usize)> { match func.kind() {
-        "identifier" => {
-            let name = text(func, src);
-            (rule.callee.as_deref() == Some(name))
-                .then(|| (rule.method.clone().unwrap_or_else(|| "GET".into()), rule.url_arg))
-        }
-        "member_expression" => {
-            let prop = func.child_by_field_name("property")?;
-            let verb = text(prop, src).to_ascii_lowercase();
-            // `this.post(...)`, `app.get(...)` 은 라우트 정의다.
-            let receiver = func.child_by_field_name("object").map(|o| text(o, src));
-            if let Some(recv) = receiver {
+    let (method, url_arg) = clients.iter().find_map(|rule| -> Option<(String, usize)> {
+        match receiver.as_deref() {
+            // `fetch("/api/x")`처럼 수신자 없이 부르는 형태
+            None => (rule.callee.as_deref() == Some(callee.as_str()))
+                .then(|| (rule.method.clone().unwrap_or_else(|| "GET".into()), rule.url_arg)),
+            Some(recv) => {
+                // `this.post(...)`, `app.get(...)`은 라우트 정의다.
                 if rule
                     .exclude_receivers
                     .iter()
@@ -695,32 +796,33 @@ fn api_call_of(
                 {
                     return None;
                 }
+                let verb = callee.to_ascii_lowercase();
+                rule.receiver_methods
+                    .iter()
+                    .any(|m| m.eq_ignore_ascii_case(&verb))
+                    .then(|| {
+                        // method 미지정이면 호출된 메서드 이름이 곧 HTTP 메서드다.
+                        // C# `GetAsync`처럼 접미가 붙는 관용구를 벗긴다.
+                        let m = rule
+                            .method
+                            .clone()
+                            .unwrap_or_else(|| verb.trim_end_matches("async").to_uppercase());
+                        (m, rule.url_arg)
+                    })
             }
-            rule.receiver_methods
-                .iter()
-                .any(|m| m.eq_ignore_ascii_case(&verb))
-                .then(|| {
-                    // method 미지정이면 호출된 메서드 이름이 곧 HTTP 메서드다.
-                    // C# `GetAsync` 처럼 접미가 붙는 관용구를 벗긴다.
-                    let m = rule.method.clone().unwrap_or_else(|| {
-                        verb.trim_end_matches("async").to_uppercase()
-                    });
-                    (m, rule.url_arg)
-                })
         }
-        _ => None,
-    }})?;
+    })?;
 
     let args = call.child_by_field_name("arguments")?;
 
-    // 인자에 함수/화살표가 있으면 **핸들러 등록**이다 — 클라이언트 호출이 아니다.
+    // 인자에 함수나 람다가 있으면 **핸들러 등록**이다. 클라이언트 호출이 아니다.
     // Express `app.get(path, handler)`, miragejs `this.post(path, handler)` 등을
-    // 프레임워크 무관하게 걸러낸다.
-    if has_function_argument(args) {
+    // 프레임워크와 무관하게 걸러낸다.
+    if has_function_argument(args, syntax) {
         return None;
     }
 
-    let raw = url_argument_at(args, src, url_arg)?;
+    let raw = url_argument_at(args, src, url_arg, syntax)?;
     // 도메인 경로처럼 보이지 않으면 버린다. `useState("")` 같은 오탐 방지.
     if !raw.starts_with('/') && !raw.contains("/api") {
         return None;
@@ -736,19 +838,22 @@ fn api_call_of(
     })
 }
 
-fn has_function_argument(args: Node) -> bool {
-    let mut cursor = args.walk();
-    let found = args.children(&mut cursor).any(|a| {
-        matches!(
-            a.kind(),
-            "arrow_function" | "function_expression" | "function" | "function_declaration"
-        )
-    });
-    found
+/// C#처럼 실인자가 한 겹 감싸여 있으면 안쪽 노드를 꺼낸다.
+fn unwrap_argument<'a>(arg: Node<'a>, syntax: &CallSyntax) -> Node<'a> {
+    match syntax.arg_wrapper {
+        Some(wrapper) if arg.kind() == wrapper => arg.named_child(0).unwrap_or(arg),
+        _ => arg,
+    }
 }
 
-/// `index`번째 실인자가 문자열/템플릿 리터럴이면 원문을 돌려준다.
-fn url_argument_at(args: Node, src: &[u8], index: usize) -> Option<String> {
+fn has_function_argument(args: Node, syntax: &CallSyntax) -> bool {
+    let mut cursor = args.walk();
+    args.children(&mut cursor)
+        .any(|a| syntax.lambda.contains(&unwrap_argument(a, syntax).kind()))
+}
+
+/// `index`번째 실인자에서 URL 문자열을 뽑는다.
+fn url_argument_at(args: Node, src: &[u8], index: usize, syntax: &CallSyntax) -> Option<String> {
     let mut cursor = args.walk();
     let mut position = 0usize;
     for arg in args.children(&mut cursor) {
@@ -756,17 +861,43 @@ fn url_argument_at(args: Node, src: &[u8], index: usize) -> Option<String> {
             continue;
         }
         if position == index {
-            return match arg.kind() {
-                "string" | "template_string" => {
-                    Some(text(arg, src).trim_matches(['"', '\'', '`']).to_string())
-                }
-                // 변수로 만든 URL은 정적으로 알 수 없다.
-                _ => None,
-            };
+            return literal_url(unwrap_argument(arg, syntax), src, syntax);
         }
         position += 1;
     }
     None
+}
+
+/// 문자열 리터럴이면 따옴표와 접두를 벗겨 돌려준다.
+///
+/// Java의 `"/api/orders/" + id`처럼 이어 붙인 경우에는 앞쪽 리터럴만 알 수 있다.
+/// 그 리터럴이 슬래시로 끝나면 세그먼트 하나가 통째로 치환되는 형태이므로
+/// `{}`를 붙여 라우트와 맞춘다. 그렇지 않으면 어떤 경로가 되는지 알 수 없으므로
+/// `${}`를 붙여 동적으로 표시한다.
+fn literal_url(node: Node, src: &[u8], syntax: &CallSyntax) -> Option<String> {
+    if syntax.string.contains(&node.kind()) {
+        return Some(strip_string_affixes(text(node, src)));
+    }
+    if node.kind() == "binary_expression" {
+        let left = node.child_by_field_name("left")?;
+        if syntax.string.contains(&left.kind()) {
+            let head = strip_string_affixes(text(left, src));
+            return Some(if head.ends_with('/') {
+                format!("{head}{{}}")
+            } else {
+                format!("{head}${{}}")
+            });
+        }
+    }
+    None
+}
+
+/// 문자열 리터럴의 접두와 따옴표를 벗긴다.
+/// 파이썬의 `f"..."`, C#의 `$"..."`와 `@"..."`를 처리한다.
+fn strip_string_affixes(raw: &str) -> String {
+    raw.trim_start_matches(['f', 'F', 'r', 'R', 'b', 'B', 'u', 'U', '$', '@'])
+        .trim_matches(['"', '\'', '`'])
+        .to_string()
 }
 
 #[cfg(test)]
@@ -1067,5 +1198,147 @@ public class OrderController : ControllerBase
         assert!(got.contains(&("GET".into(), "/api/orders/{}".into())), "{got:?}");
         assert!(got.contains(&("POST".into(), "/api/orders".into())), "{got:?}");
         assert!(f.beans.iter().any(|b| b.name == "OrderController"), "{:?}", f.beans);
+    }
+
+    // ── HTTP 클라이언트 호출: 네 언어 ──────────────────────────────────
+    // 백엔드도 다른 서비스를 부르므로 Java·C#·Python에서도 탐지되어야 한다.
+
+    fn calls_in(lang: &str, language: tree_sitter::Language, src: &str) -> Vec<ApiCallFact> {
+        let mut p = Parser::new();
+        p.set_language(&language).unwrap();
+        let tree = p.parse(src, None).unwrap();
+        let rules = crate::rules::FrameworkRules::effective(&Default::default());
+        extract_api_calls(tree.root_node(), src.as_bytes(), lang, &rules)
+    }
+
+    #[test]
+    fn detects_api_calls_in_every_supported_language() {
+        let cases: Vec<(&str, tree_sitter::Language, &str, &str, &str)> = vec![
+            (
+                "typescript",
+                tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+                r#"axios.get("/api/articles");"#,
+                "GET",
+                "/api/articles",
+            ),
+            // JavaScript는 TypeScript 파서로 읽는다. lang.rs의 대응표가 그렇게 정해 두었다.
+            (
+                "javascript",
+                tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+                r#"fetch("/api/articles");"#,
+                "GET",
+                "/api/articles",
+            ),
+            (
+                "python",
+                tree_sitter_python::LANGUAGE.into(),
+                r#"requests.post("/api/articles")"#,
+                "POST",
+                "/api/articles",
+            ),
+            (
+                "java",
+                tree_sitter_java::LANGUAGE.into(),
+                r#"class C { void m() { rest.getForObject("/api/articles", String.class); } }"#,
+                "GET",
+                "/api/articles",
+            ),
+            (
+                "csharp",
+                tree_sitter_c_sharp::LANGUAGE.into(),
+                r#"class C { void M() { http.GetAsync("/api/articles"); } }"#,
+                "GET",
+                "/api/articles",
+            ),
+        ];
+        for (lang, language, src, method, path) in cases {
+            let calls = calls_in(lang, language, src);
+            assert_eq!(calls.len(), 1, "{lang} 에서 호출을 찾지 못했다: {calls:?}");
+            assert_eq!(calls[0].method, method, "{lang} 의 HTTP 메서드");
+            assert_eq!(calls[0].path, path, "{lang} 의 경로");
+        }
+    }
+
+    #[test]
+    fn java_string_concat_becomes_path_parameter() {
+        // `"/api/articles/" + slug` 는 세그먼트 하나가 통째로 치환되는 형태이므로
+        // Spring 의 `/api/articles/{slug}` 정규화 결과와 같은 문자열이 되어야 한다.
+        let calls = calls_in(
+            "java",
+            tree_sitter_java::LANGUAGE.into(),
+            r#"class C { void m() { rest.getForObject("/api/articles/" + slug, String.class); } }"#,
+        );
+        assert_eq!(calls.len(), 1, "{calls:?}");
+        assert_eq!(calls[0].path, "/api/articles/{}");
+        assert!(!calls[0].dynamic, "세그먼트 전체 치환은 동적이 아니다");
+    }
+
+    #[test]
+    fn java_concat_without_slash_is_dynamic() {
+        // 슬래시 없이 이어 붙이면 어떤 엔드포인트가 되는지 알 수 없다.
+        let calls = calls_in(
+            "java",
+            tree_sitter_java::LANGUAGE.into(),
+            r#"class C { void m() { rest.getForObject("/api/article" + suffix, String.class); } }"#,
+        );
+        assert_eq!(calls.len(), 1, "{calls:?}");
+        assert!(calls[0].dynamic, "경로를 확정할 수 없으므로 동적이어야 한다");
+    }
+
+    #[test]
+    fn python_fstring_and_csharp_interpolation_are_normalized() {
+        let py = calls_in(
+            "python",
+            tree_sitter_python::LANGUAGE.into(),
+            r#"requests.get(f"/api/articles/{slug}")"#,
+        );
+        assert_eq!(py.len(), 1, "{py:?}");
+        assert_eq!(py[0].path, "/api/articles/{}");
+
+        let cs = calls_in(
+            "csharp",
+            tree_sitter_c_sharp::LANGUAGE.into(),
+            r#"class C { void M() { http.GetAsync($"/api/articles/{slug}"); } }"#,
+        );
+        assert_eq!(cs.len(), 1, "{cs:?}");
+        assert_eq!(cs[0].path, "/api/articles/{}");
+    }
+
+    #[test]
+    fn java_map_put_is_not_an_api_call() {
+        // `Map.put` 은 이름이 겹치지만 HTTP 호출이 아니다.
+        // 기본 규칙에서 put 을 뺀 이유를 고정한다.
+        let calls = calls_in(
+            "java",
+            tree_sitter_java::LANGUAGE.into(),
+            r#"class C { void m() { routes.put("/api/articles", handler); } }"#,
+        );
+        assert!(calls.is_empty(), "Map.put 을 API 호출로 오인했다: {calls:?}");
+    }
+
+    #[test]
+    fn lambda_argument_is_route_registration_in_every_language() {
+        // 인자에 람다가 있으면 핸들러 등록이다. 언어마다 람다 노드 이름이 다르므로
+        // 네 언어에서 모두 걸러지는지 고정한다.
+        let java = calls_in(
+            "java",
+            tree_sitter_java::LANGUAGE.into(),
+            r#"class C { void m() { rest.getForObject("/api/x", r -> r); } }"#,
+        );
+        assert!(java.is_empty(), "{java:?}");
+
+        let py = calls_in(
+            "python",
+            tree_sitter_python::LANGUAGE.into(),
+            r#"app.get("/api/x", lambda r: r)"#,
+        );
+        assert!(py.is_empty(), "{py:?}");
+
+        let cs = calls_in(
+            "csharp",
+            tree_sitter_c_sharp::LANGUAGE.into(),
+            r#"class C { void M() { http.GetAsync("/api/x", r => r); } }"#,
+        );
+        assert!(cs.is_empty(), "{cs:?}");
     }
 }

@@ -306,6 +306,52 @@ pub fn builtin() -> FrameworkRules {
                     .map(|s| s.to_string())
                     .collect(),
             },
+            // Spring RestTemplate — 백엔드가 다른 서비스를 부르는 경로다.
+            // 메서드 이름에 HTTP 동사가 드러나는 것만 넣는다. `put`은 `Map.put`이,
+            // `get`은 `List.get`이 같은 이름이라 오탐이 커서 제외한다.
+            // RestTemplate의 `put`·`exchange`가 필요하면 설정 파일에 추가하면 된다.
+            HttpClientRule {
+                lang: "java".into(),
+                callee: None,
+                receiver_methods: ["getForObject", "getForEntity"]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
+                method: Some("GET".into()),
+                url_arg: 0,
+                exclude_receivers: Vec::new(),
+            },
+            HttpClientRule {
+                lang: "java".into(),
+                callee: None,
+                receiver_methods: ["postForObject", "postForEntity", "postForLocation"]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
+                method: Some("POST".into()),
+                url_arg: 0,
+                exclude_receivers: Vec::new(),
+            },
+            HttpClientRule {
+                lang: "java".into(),
+                callee: None,
+                receiver_methods: ["patchForObject"].iter().map(|s| s.to_string()).collect(),
+                method: Some("PATCH".into()),
+                url_arg: 0,
+                exclude_receivers: Vec::new(),
+            },
+            HttpClientRule {
+                lang: "java".into(),
+                callee: None,
+                receiver_methods: ["delete"].iter().map(|s| s.to_string()).collect(),
+                method: Some("DELETE".into()),
+                url_arg: 0,
+                // 자체 DAO의 delete(경로문자열)는 URL 판별에서 걸러진다.
+                exclude_receivers: ["repository", "repo", "dao", "mapper"]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
+            },
             // C# HttpClient
             HttpClientRule {
                 lang: "csharp".into(),

@@ -511,7 +511,7 @@ fn draw_bench(f: &mut Frame, area: Rect, app: &mut App) {
     let mut lines = vec![
         "교차 저장소 계약 (CALLS_API)".into(),
         format!(
-            "  프런트 API 호출 {api} — 연결 {linked} ({}%)",
+            "  API 호출 {api} — 연결 {linked} ({}%)",
             if api > 0 { linked * 100 / api } else { 0 }
         ),
         format!("  동적 경로 {} (정적 분석 불가)", get("api_calls_dynamic")),

@@ -99,18 +99,20 @@ Rust 1.90 이상이 필요합니다. macOS와 Windows에서 각각 네이티브�
 
 | 언어 | 심볼 추출 | 라우트 정의 | 의존성 주입 | 영속 계층 | API 호출 탐지 |
 |---|---|---|---|---|---|
-| Java | 지원 | Spring | Spring | JPA, MyBatis | 없음 |
-| TypeScript | 지원 | 없음 | 없음 | 없음 | 지원 |
-| JavaScript | 지원 | 없음 | 없음 | 없음 | 지원 |
-| Python | 지원 | FastAPI, Flask | 없음 | SQLAlchemy | 규칙만 있음 |
-| C# | 지원 (partial 병합) | ASP.NET | 없음 | 없음 | 규칙만 있음 |
+| Java | 지원 | Spring | Spring | JPA, MyBatis | RestTemplate |
+| TypeScript | 지원 | 없음 | 없음 | 없음 | fetch, axios 계열 |
+| JavaScript | 지원 | 없음 | 없음 | 없음 | fetch, axios 계열 |
+| Python | 지원 | FastAPI, Flask | 없음 | SQLAlchemy | requests 계열 |
+| C# | 지원 (partial 병합) | ASP.NET | 없음 | 없음 | HttpClient |
 | Rust | 지원 | 없음 | 없음 | 없음 | 없음 |
 
-**API 호출 탐지는 현재 TypeScript와 JavaScript에서만 동작합니다.** Python과
-C#은 설정에 규칙이 등록되어 있지만 탐지기가 두 언어의 구문 트리를 읽지
-못하므로 결과가 나오지 않습니다. Java는 규칙 자체가 없습니다. 서버끼리
-호출하는 관계를 잇는 기능이므로 프런트엔드가 백엔드를 부르는 경로를 찾는
-용도에는 지장이 없습니다.
+API 호출은 프런트엔드만 하는 것이 아닙니다. 백엔드도 다른 서비스나 외부
+API를 부르므로 네 언어에서 모두 탐지합니다. 서비스 사이의 호출도 같은
+`calls_api` 관계로 이어집니다.
+
+다만 메서드를 이어 부르는 형태는 아직 읽지 못합니다. Spring `WebClient`의
+`get().uri("/api/x")`나 OkHttp의 요청 빌더가 그런 경우입니다. URL이 변수
+하나로만 들어가는 호출도 정적으로 알 수 없어 건너뜁니다.
 
 프레임워크별로 인식하는 표시는 다음과 같습니다.
 
@@ -124,7 +126,10 @@ C#은 설정에 규칙이 등록되어 있지만 탐지기가 두 언어의 구�
 | FastAPI, Flask | `@get`부터 `@patch`까지의 데코레이터와 `@route` |
 | SQLAlchemy | `__tablename__` |
 | ASP.NET | `[HttpGet]` 계열 다섯 가지와 `[Route]`, `[ApiController]` |
-| HTTP 클라이언트 | `fetch`, `.get()`부터 `.patch()`까지의 메서드 호출 (TypeScript, JavaScript에서만 동작) |
+| HTTP 클라이언트 (TypeScript, JavaScript) | `fetch`와 `.get()`부터 `.options()`까지의 메서드 호출 |
+| HTTP 클라이언트 (Python) | `.get()`부터 `.patch()`까지의 메서드 호출 |
+| HTTP 클라이언트 (Java) | `getForObject`, `getForEntity`, `postForObject`, `postForEntity`, `postForLocation`, `patchForObject`, `delete` |
+| HTTP 클라이언트 (C#) | `GetAsync`부터 `PatchAsync`까지의 메서드 호출 |
 
 프레임워크 지원은 설정 파일에 규칙을 추가하여 넓힐 수 있습니다. 바이너리를
 다시 빌드할 필요가 없습니다. 자세한 방법은 [사용 안내서](docs/GUIDE.md)에

@@ -279,30 +279,30 @@ pub fn normalize_route_path(raw: &str) -> String {
 여기서 실제로 겪은 문제를 다룹니다.
 
 ```rust
-fn api_call_of(call: Node, src: &[u8], clients: &[&HttpClientRule]) -> Option<ApiCallFact> {
-    let func = call.child_by_field_name("function")?;
+fn api_call_of(
+    call: Node,
+    src: &[u8],
+    clients: &[&HttpClientRule],
+    syntax: &CallSyntax,
+) -> Option<ApiCallFact> {
+    let (receiver, callee) = callee_of(call, src, syntax)?;
 
     let (method, url_arg) = clients.iter().find_map(|rule| -> Option<(String, usize)> {
-        match func.kind() {
-            "identifier" => { /* fetch(...) */ }
-            "member_expression" => {
-                let prop = func.child_by_field_name("property")?;
-                let verb = text(prop, src).to_ascii_lowercase();
-                let receiver = func.child_by_field_name("object").map(|o| text(o, src));
-                if let Some(recv) = receiver {
-                    if rule.exclude_receivers.iter().any(|x| x.eq_ignore_ascii_case(recv)) {
-                        return None;
-                    }
+        match receiver.as_deref() {
+            None => (rule.callee.as_deref() == Some(callee.as_str()))
+                .then(|| (/* fetch(...) */)),
+            Some(recv) => {
+                if rule.exclude_receivers.iter().any(|x| x.eq_ignore_ascii_case(recv)) {
+                    return None;
                 }
                 // ...
             }
-            _ => None,
         }
     })?;
 
     let args = call.child_by_field_name("arguments")?;
 
-    if has_function_argument(args) {
+    if has_function_argument(args, syntax) {
         return None;
     }
     // ...
@@ -327,6 +327,64 @@ fn api_call_of(call: Node, src: &[u8], clients: &[&HttpClientRule]) -> Option<Ap
 동작합니다.
 
 수정한 뒤 실제 클라이언트 호출은 4건이었고 연결도 4건이었습니다.
+
+### 언어마다 구문 트리의 이름이 다릅니다
+
+이 탐지기에서 실제로 겪은 결함입니다. 처음에는 이렇게 썼습니다.
+
+```rust
+if node.kind() == "call_expression" {
+    // 호출을 발견했다
+}
+```
+
+TypeScript에서는 잘 동작했습니다. 그런데 Python과 C# 규칙을 설정에 넣어
+두었는데도 결과가 하나도 나오지 않았습니다.
+
+원인은 **`call_expression`이라는 이름이 언어마다 다르기 때문**이었습니다.
+각 언어의 파서에 직접 물어보니 이랬습니다.
+
+| 언어 | 호출식 노드 이름 |
+|---|---|
+| TypeScript, JavaScript | `call_expression` |
+| Python | `call` |
+| Java | `method_invocation` |
+| C# | `invocation_expression` |
+
+이름만 다른 것이 아니라 구조도 다릅니다. TypeScript는 `function` 필드 아래에
+수신자와 메서드가 있는데, Java는 호출식 자체가 `object`와 `name` 필드를
+직접 갖습니다. C#은 실인자가 `argument` 노드로 한 겹 더 감싸여 있습니다.
+
+그래서 언어별 이름을 표로 만들었습니다.
+
+```rust
+struct CallSyntax {
+    call: &'static [&'static str],
+    member: &'static [&'static str],
+    receiver_field: &'static str,
+    method_field: &'static str,
+    string: &'static [&'static str],
+    lambda: &'static [&'static str],
+    arg_wrapper: Option<&'static str>,
+    member_is_call: bool,
+}
+```
+
+**이 결함이 오래 남아 있던 이유**가 중요합니다. `nunchi rules`를 실행하면
+Python과 C# 규칙이 목록에 나옵니다. 규칙이 등록되어 있으니 동작한다고
+믿기 쉽습니다. 그러나 규칙이 있다는 것과 그 규칙이 쓰인다는 것은 다릅니다.
+
+그래서 네 언어를 모두 확인하는 테스트를 넣었습니다.
+
+```rust
+#[test]
+fn detects_api_calls_in_every_supported_language() {
+    // 언어마다 최소 한 건씩 실제로 탐지되는지 확인합니다
+}
+```
+
+언어를 추가할 때 `CallSyntax`에 항목을 넣는 것을 잊으면 이 테스트가
+실패합니다.
 
 ### 정적으로 알 수 없는 경로
 
@@ -408,5 +466,9 @@ Spring에서는 호출 관계가 어노테이션에만 있으므로 tree-sitter�
 라우트를 정의하는 코드를 클라이언트 호출로 오인했던 문제는
 `exclude_receivers`와 "인자에 함수가 있으면 등록"이라는 구조적 판정으로
 막았습니다.
+
+호출식 노드 이름이 언어마다 다르다는 사실을 놓쳐서 Python과 C#의 규칙이
+동작하지 않았던 적도 있습니다. 규칙이 등록되어 있다는 사실만으로는 그 규칙이
+쓰이고 있다고 말할 수 없습니다.
 
 다음 장에서는 이렇게 만든 노드를 저장하는 부분을 봅니다.
