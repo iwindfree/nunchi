@@ -102,9 +102,15 @@ Rust 1.90 이상이 필요합니다. macOS와 Windows에서 각각 네이티브�
 | Java | 지원 | Spring | Spring | JPA, MyBatis | 없음 |
 | TypeScript | 지원 | 없음 | 없음 | 없음 | 지원 |
 | JavaScript | 지원 | 없음 | 없음 | 없음 | 지원 |
-| Python | 지원 | FastAPI, Flask | 없음 | SQLAlchemy | 지원 |
-| C# | 지원 (partial 병합) | ASP.NET | 없음 | 없음 | 지원 |
+| Python | 지원 | FastAPI, Flask | 없음 | SQLAlchemy | 규칙만 있음 |
+| C# | 지원 (partial 병합) | ASP.NET | 없음 | 없음 | 규칙만 있음 |
 | Rust | 지원 | 없음 | 없음 | 없음 | 없음 |
+
+**API 호출 탐지는 현재 TypeScript와 JavaScript에서만 동작합니다.** Python과
+C#은 설정에 규칙이 등록되어 있지만 탐지기가 두 언어의 구문 트리를 읽지
+못하므로 결과가 나오지 않습니다. Java는 규칙 자체가 없습니다. 서버끼리
+호출하는 관계를 잇는 기능이므로 프런트엔드가 백엔드를 부르는 경로를 찾는
+용도에는 지장이 없습니다.
 
 프레임워크별로 인식하는 표시는 다음과 같습니다.
 
@@ -118,11 +124,7 @@ Rust 1.90 이상이 필요합니다. macOS와 Windows에서 각각 네이티브�
 | FastAPI, Flask | `@get`부터 `@patch`까지의 데코레이터와 `@route` |
 | SQLAlchemy | `__tablename__` |
 | ASP.NET | `[HttpGet]` 계열 다섯 가지와 `[Route]`, `[ApiController]` |
-| HTTP 클라이언트 | `fetch`, `.get()`부터 `.patch()`까지의 메서드 호출, C#의 `GetAsync` 계열 |
-
-라우트 정의가 없는 언어에서도 API 호출은 탐지하므로, 프런트엔드가 어느
-엔드포인트를 부르는지는 알 수 있습니다. 위 표에서 TypeScript와 JavaScript가
-그런 경우입니다.
+| HTTP 클라이언트 | `fetch`, `.get()`부터 `.patch()`까지의 메서드 호출 (TypeScript, JavaScript에서만 동작) |
 
 프레임워크 지원은 설정 파일에 규칙을 추가하여 넓힐 수 있습니다. 바이너리를
 다시 빌드할 필요가 없습니다. 자세한 방법은 [사용 안내서](docs/GUIDE.md)에
