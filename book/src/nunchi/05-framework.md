@@ -185,6 +185,19 @@ method = "POST"
 이 틀에 Spring, NestJS, Micronaut, ASP.NET, Ktor, FastAPI, Flask가 모두
 들어갑니다.
 
+내장 기본 규칙도 Rust 코드가 아니라 `crates/nunchi-core/rules/builtin.toml`에
+있습니다. `include_str!`이 컴파일 시점에 넣으므로 배포물은 여전히 실행 파일
+하나입니다. 앞 장의 tree-sitter 쿼리를 `.scm` 파일에 둔 것과 같은 방식입니다.
+
+처음에는 Rust 코드였는데 이렇게 옮겼습니다. 규칙 하나를 더하는 일은 "이
+어노테이션은 이 HTTP 메서드다"라는 사실을 적는 것뿐인데, 코드로 두면
+`"java".into()`와 `["a", "b"].iter().map(|s| s.to_string()).collect()` 같은
+관용구를 알아야 했습니다. Spring을 아는 사람이 Rust를 몰라서 규칙을 추가하지
+못하는 상황이 생깁니다.
+
+대신 필드 이름을 잘못 적어도 컴파일이 됩니다. 그래서 `builtin_rules_parse`
+테스트로 막았습니다. 쿼리 파일에서 겪은 문제와 그 해결책이 같습니다.
+
 ### 파이썬은 데코레이터입니다
 
 ```rust

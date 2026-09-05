@@ -141,231 +141,23 @@ pub struct PersistenceRule {
 }
 
 /// 내장 기본 규칙. 설정이 비어 있어도 Spring + React가 바로 동작한다.
+/// Built-in default rules, defined in `rules/builtin.toml`.
+///
+/// The rules live in a data file rather than in Rust source on purpose. Adding a
+/// rule only states a fact — "this annotation means this HTTP method" — but in
+/// code that fact needs `String` conversions and `Vec` construction idioms.
+/// Someone who knows the framework should not be blocked by not knowing Rust.
+///
+/// `include_str!` embeds the file at compile time, so the artifact is still a
+/// single executable. Same approach as the tree-sitter queries in `queries/*.scm`.
+///
+/// # Panics
+///
+/// A malformed file aborts at startup. That beats running with silently broken
+/// defaults, and `builtin_rules_parse` catches it during `cargo test` first.
 pub fn builtin() -> FrameworkRules {
-    let java_route = |anno: &str, method: &str| RouteRule {
-        lang: "java".into(),
-        annotation: anno.into(),
-        method: method.into(),
-        method_from_args_prefix: None,
-        receivers: Vec::new(),
-        method_from_args_list: None,
-    };
-    // FastAPI `@app.get("/x")` · Flask `@app.route("/x", methods=["POST"])`
-    let py_receivers: Vec<String> = ["app", "router", "api", "blueprint", "bp"]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
-    let py_route = |name: &str, method: &str| RouteRule {
-        lang: "python".into(),
-        annotation: name.into(),
-        method: method.into(),
-        method_from_args_prefix: None,
-        receivers: py_receivers.clone(),
-        method_from_args_list: None,
-    };
-    // ASP.NET `[HttpGet("orders")]`
-    let cs_route = |anno: &str, method: &str| RouteRule {
-        lang: "csharp".into(),
-        annotation: anno.into(),
-        method: method.into(),
-        method_from_args_prefix: None,
-        receivers: Vec::new(),
-        method_from_args_list: None,
-    };
-
-    FrameworkRules {
-        replace_defaults: false,
-        route: vec![
-            java_route("GetMapping", "GET"),
-            java_route("PostMapping", "POST"),
-            java_route("PutMapping", "PUT"),
-            java_route("DeleteMapping", "DELETE"),
-            java_route("PatchMapping", "PATCH"),
-            RouteRule {
-                lang: "java".into(),
-                annotation: "RequestMapping".into(),
-                method: "ANY".into(),
-                method_from_args_prefix: Some("RequestMethod.".into()),
-                receivers: Vec::new(),
-                method_from_args_list: None,
-            },
-            py_route("get", "GET"),
-            py_route("post", "POST"),
-            py_route("put", "PUT"),
-            py_route("delete", "DELETE"),
-            py_route("patch", "PATCH"),
-            RouteRule {
-                lang: "python".into(),
-                annotation: "route".into(),
-                method: "ANY".into(),
-                method_from_args_prefix: None,
-                receivers: py_receivers.clone(),
-                // Flask는 methods=["POST"] 로 지정한다
-                method_from_args_list: Some("methods".into()),
-            },
-            cs_route("HttpGet", "GET"),
-            cs_route("HttpPost", "POST"),
-            cs_route("HttpPut", "PUT"),
-            cs_route("HttpDelete", "DELETE"),
-            cs_route("HttpPatch", "PATCH"),
-        ],
-        base_path: vec![
-            BasePathRule { lang: "java".into(), annotation: "RequestMapping".into() },
-            // ASP.NET: [Route("api/[controller]")]
-            BasePathRule { lang: "csharp".into(), annotation: "Route".into() },
-        ],
-        bean: vec![
-            BeanRule {
-            lang: "csharp".into(),
-            annotations: ["ApiController", "Controller"].iter().map(|s| s.to_string()).collect(),
-        },
-        BeanRule {
-            lang: "java".into(),
-            annotations: [
-                "RestController",
-                "Controller",
-                "Service",
-                "Repository",
-                "Component",
-                "Configuration",
-            ]
-            .iter()
-            .map(|s| s.to_string())
-            .collect(),
-        }],
-        inject: vec![InjectRule {
-            lang: "java".into(),
-            annotations: vec!["Autowired".into(), "Inject".into()],
-            final_fields: true,
-            constructor_params: true,
-        }],
-        persistence: vec![
-            PersistenceRule {
-                lang: "java".into(),
-                entity_annotations: vec!["Entity".into()],
-                table_annotations: vec!["Table".into()],
-                // MyBatis 어노테이션 매퍼 — 한국 기업 Spring 환경에서 비중이 크다.
-                sql_annotations: ["Select", "Insert", "Update", "Delete", "SelectProvider"]
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect(),
-                table_attribute: None,
-                repository_supertypes: ["JpaRepository", "CrudRepository", "MongoRepository"]
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect(),
-            },
-            PersistenceRule {
-                lang: "python".into(),
-                entity_annotations: Vec::new(),
-                table_annotations: Vec::new(),
-                sql_annotations: Vec::new(),
-                // SQLAlchemy
-                table_attribute: Some("__tablename__".into()),
-                repository_supertypes: Vec::new(),
-            },
-        ],
-        http_client: vec![
-            HttpClientRule {
-                lang: "typescript".into(),
-                callee: Some("fetch".into()),
-                receiver_methods: Vec::new(),
-                method: Some("GET".into()),
-                url_arg: 0,
-                exclude_receivers: Vec::new(),
-            },
-            HttpClientRule {
-                lang: "typescript".into(),
-                callee: None,
-                receiver_methods: ["get", "post", "put", "delete", "patch", "head", "options"]
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect(),
-                // method 생략 → 호출된 메서드 이름이 곧 HTTP 메서드
-                method: None,
-                url_arg: 0,
-                exclude_receivers: ["this", "app", "router", "server", "mock"]
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect(),
-            },
-            // requests / httpx / aiohttp — 파이썬 HTTP 클라이언트
-            HttpClientRule {
-                lang: "python".into(),
-                callee: None,
-                receiver_methods: ["get", "post", "put", "delete", "patch"]
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect(),
-                method: None,
-                url_arg: 0,
-                // app·router는 라우트 정의다. cache·session은 HTTP가 아닐 수 있으나
-                // session.get(url)은 실제 클라이언트이므로 제외하지 않는다.
-                exclude_receivers: ["app", "router", "blueprint", "bp", "cache", "redis"]
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect(),
-            },
-            // Spring RestTemplate — 백엔드가 다른 서비스를 부르는 경로다.
-            // 메서드 이름에 HTTP 동사가 드러나는 것만 넣는다. `put`은 `Map.put`이,
-            // `get`은 `List.get`이 같은 이름이라 오탐이 커서 제외한다.
-            // RestTemplate의 `put`·`exchange`가 필요하면 설정 파일에 추가하면 된다.
-            HttpClientRule {
-                lang: "java".into(),
-                callee: None,
-                receiver_methods: ["getForObject", "getForEntity"]
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect(),
-                method: Some("GET".into()),
-                url_arg: 0,
-                exclude_receivers: Vec::new(),
-            },
-            HttpClientRule {
-                lang: "java".into(),
-                callee: None,
-                receiver_methods: ["postForObject", "postForEntity", "postForLocation"]
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect(),
-                method: Some("POST".into()),
-                url_arg: 0,
-                exclude_receivers: Vec::new(),
-            },
-            HttpClientRule {
-                lang: "java".into(),
-                callee: None,
-                receiver_methods: ["patchForObject"].iter().map(|s| s.to_string()).collect(),
-                method: Some("PATCH".into()),
-                url_arg: 0,
-                exclude_receivers: Vec::new(),
-            },
-            HttpClientRule {
-                lang: "java".into(),
-                callee: None,
-                receiver_methods: ["delete"].iter().map(|s| s.to_string()).collect(),
-                method: Some("DELETE".into()),
-                url_arg: 0,
-                // 자체 DAO의 delete(경로문자열)는 URL 판별에서 걸러진다.
-                exclude_receivers: ["repository", "repo", "dao", "mapper"]
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect(),
-            },
-            // C# HttpClient
-            HttpClientRule {
-                lang: "csharp".into(),
-                callee: None,
-                receiver_methods: ["GetAsync", "PostAsync", "PutAsync", "DeleteAsync", "PatchAsync"]
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect(),
-                method: None,
-                url_arg: 0,
-                exclude_receivers: Vec::new(),
-            },
-        ],
-    }
+    toml::from_str(include_str!("../rules/builtin.toml"))
+        .expect("failed to parse rules/builtin.toml — the built-in rule file is malformed")
 }
 
 impl FrameworkRules {
@@ -450,6 +242,35 @@ impl FrameworkRules {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn builtin_rules_parse() {
+        // The defaults live in a TOML file, so a typo in a field name is not a
+        // compile error. This test is what turns it back into one.
+        let r = builtin();
+        assert!(!r.route.is_empty(), "no route rules parsed");
+        assert!(!r.bean.is_empty(), "no bean rules parsed");
+        assert!(!r.inject.is_empty(), "no inject rules parsed");
+        assert!(!r.http_client.is_empty(), "no http_client rules parsed");
+        assert!(!r.persistence.is_empty(), "no persistence rules parsed");
+        assert!(!r.base_path.is_empty(), "no base_path rules parsed");
+        assert!(
+            !r.replace_defaults,
+            "built-in rules must never set replace_defaults"
+        );
+    }
+
+    #[test]
+    fn builtin_survives_a_serialization_round_trip() {
+        // `nunchi rules --toml` prints these rules and users paste the output into
+        // their own config. Serializing and reading it back must not lose anything.
+        let original = builtin();
+        let text = toml::to_string_pretty(&original).expect("serialize");
+        let parsed: FrameworkRules = toml::from_str(&text).expect("parse back");
+        assert_eq!(original.route.len(), parsed.route.len());
+        assert_eq!(original.http_client.len(), parsed.http_client.len());
+        assert_eq!(original.persistence.len(), parsed.persistence.len());
+    }
 
     #[test]
     fn builtin_covers_spring_and_react() {

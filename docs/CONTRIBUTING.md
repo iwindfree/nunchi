@@ -49,7 +49,8 @@ crates/
 │   ├── path.rs                  경로 정규화(Windows 대응)와 내용 해시
 │   ├── lang.rs                  확장자에서 언어를 판별합니다
 │   ├── config.rs                설정 파일 두 개를 읽고 병합합니다
-│   ├── rules.rs                 프레임워크 규칙을 데이터로 담습니다
+│   ├── rules.rs                 규칙의 타입 정의와 병합·조회
+│   ├── rules/builtin.toml       내장 기본 규칙 (여기에 추가합니다)
 │   ├── semantic.rs              식별자 분해와 동의어 사전
 │   ├── extract.rs               tree-sitter로 심볼을 추출합니다
 │   ├── framework.rs             어노테이션과 데코레이터를 해석합니다
@@ -136,9 +137,36 @@ TUI가 같은 코어를 직접 호출하므로 로직이 중복되지 않습니�
 
 ### 새 프레임워크를 지원할 때
 
-대부분은 **코드를 고칠 필요가 없습니다.** `nunchi.shared.toml`의
-`[[framework.*]]`에 규칙을 추가하시면 됩니다. 방법은
+두 가지 경우로 나뉩니다.
+
+**자기 프로젝트에서만 쓸 규칙**이라면 코드를 고칠 필요가 없습니다.
+`nunchi.shared.toml`의 `[[framework.*]]`에 추가하시면 됩니다. 방법은
 [사용 안내서의 확장 절](GUIDE.md)에 정리해 두었습니다.
+
+**모두가 쓸 기본 규칙**이라면 `crates/nunchi-core/rules/builtin.toml`에
+항목을 추가하고 `cargo test`를 실행하십시오. Rust 코드를 고칠 필요가
+없습니다.
+
+```toml
+[[route]]
+lang = "java"
+annotation = "InternalEndpoint"
+method = "POST"
+receivers = []
+```
+
+각 필드가 무엇을 뜻하는지는 `rules.rs`의 구조체 주석에 적혀 있습니다.
+현재 적용 중인 전체 규칙은 `nunchi rules --toml`로 출력할 수 있으므로,
+자기 설정으로 검증한 규칙을 그대로 옮겨 오시면 됩니다.
+
+> 규칙을 데이터 파일에 둔 이유가 있습니다. 규칙을 하나 더하는 일은 "이
+> 어노테이션은 이 HTTP 메서드다"라는 사실을 적는 것뿐인데, Rust 코드로 두면
+> `String` 변환과 `Vec` 생성 관용구를 알아야 했습니다. 프레임워크를 아는
+> 사람이 Rust를 몰라서 기여하지 못할 이유가 없습니다.
+
+필드 이름을 잘못 적어도 컴파일은 됩니다. TOML은 문자열이기 때문입니다.
+`builtin_rules_parse` 테스트가 그것을 대신 잡아 줍니다. tree-sitter 쿼리와
+`all_queries_compile`의 관계와 같습니다.
 
 기존 정형에 맞지 않는 새로운 형태가 필요할 때만 `rules.rs`에 규칙 종류를
 추가하고 `framework.rs`에 처리 코드를 넣습니다.
