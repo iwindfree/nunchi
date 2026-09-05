@@ -27,6 +27,69 @@ flowchart TD
     I --> J[import 목록]
 ```
 
+## 구문 트리가 어떻게 생겼는가
+
+코드를 읽기 전에 tree-sitter가 만드는 트리를 실물로 보겠습니다. 이것을 모르면
+아래 코드가 무엇을 다루는지 알 수 없습니다.
+
+Java 코드 한 줄을 파서에 넣으면 이런 트리가 나옵니다. 왼쪽이 **노드 이름**이고
+오른쪽이 그 노드가 덮는 코드 조각입니다.
+
+```
+rest.getForObject("/api/x", String.class)
+
+method_invocation            "rest.getForObject("/api/x", String.class)"
+    identifier               "rest"
+    .                        "."
+    identifier               "getForObject"
+    argument_list            "("/api/x", String.class)"
+        string_literal       ""/api/x""
+        class_literal        "String.class"
+```
+
+트리의 마디 하나하나를 노드라고 부르며, 노드마다 **무슨 문법 요소인지 나타내는
+이름**이 붙어 있습니다. 코드에서 `node.kind()`로 읽는 값이 바로 이 이름입니다.
+
+맨 위 `method_invocation`이 호출식 전체를 가리키고, 그 아래로 수신자 `rest`와
+메서드 이름 `getForObject`와 인자 목록이 매달려 있습니다.
+
+### 언어마다 이름이 다릅니다
+
+같은 뜻의 코드를 TypeScript 파서에 넣으면 이름이 달라집니다.
+
+```
+axios.get("/api/x")
+
+call_expression              "axios.get("/api/x")"
+    member_expression        "axios.get"
+        identifier           "axios"
+        property_identifier  "get"
+    arguments                "("/api/x")"
+        string               ""/api/x""
+```
+
+둘을 나란히 놓으면 차이가 분명합니다.
+
+| | Java | TypeScript |
+|---|---|---|
+| 호출식 | `method_invocation` | `call_expression` |
+| 수신자와 메서드 | 호출식이 직접 담습니다 | `member_expression`으로 한 번 묶입니다 |
+| 인자 목록 | `argument_list` | `arguments` |
+| 문자열 | `string_literal` | `string` |
+
+이름이 다른 이유가 있습니다. 언어마다 문법 정의를 서로 다른 사람이 따로
+만들었고, 각자 자기 언어의 명세에 쓰인 용어를 그대로 가져왔기 때문입니다.
+Java 명세는 "메서드 호출"이라고 부르고 JavaScript 명세는 "호출식"이라고
+부릅니다.
+
+**이 차이를 놓치면 조용히 아무것도 찾지 못합니다.** 실제로 [5장](05-framework.md)에서
+그 사례를 다룹니다. 오류가 나지 않고 결과만 비어 있으므로 알아차리기가
+어렵습니다.
+
+어떤 이름이 쓰이는지 알아내는 방법은 두 가지입니다. 해당 문법 크레이트의
+`grammar.js`를 읽거나, 짧은 코드를 파싱해서 트리를 출력해 보면 됩니다. 위의
+두 트리도 그렇게 만들었습니다.
+
 ## 한 줄씩
 
 ### 언어를 열거형으로 다룹니다
@@ -294,6 +357,10 @@ let sym_id = if sym.partial {
 
 tree-sitter로 다섯 언어를 파싱하고 쿼리로 원하는 부분만 뽑아냅니다. 쿼리는
 별도 `.scm` 파일에 두고 `include_str!`로 컴파일 시점에 넣습니다.
+
+구문 트리의 노드 이름은 언어마다 다릅니다. Java의 `method_invocation`이
+TypeScript에서는 `call_expression`입니다. 이 차이를 놓치면 오류 없이 결과만
+비게 됩니다.
 
 쿼리 오류는 컴파일 시점에 잡히지 않으므로 `all_queries_compile` 테스트로
 막았습니다.
