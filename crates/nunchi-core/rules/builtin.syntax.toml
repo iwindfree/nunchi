@@ -1,9 +1,21 @@
 # 언어별 구문 트리 노드 이름
 #
-# tree-sitter는 언어마다 문법 정의를 따로 만들었고, 작성자들이 각자 자기 언어
-# 명세의 용어를 그대로 썼다. 그래서 같은 뜻인데 이름이 다르다. 메서드 호출이
-# TypeScript에서는 `call_expression`이지만 Python은 `call`, Java는
-# `method_invocation`, C#은 `invocation_expression`이다.
+# 여기 적힌 이름은 **tree-sitter 문법 크레이트가 정한 것**이다. 언어 명세가
+# 아니라 각 크레이트의 `grammar.js`에 적힌 규칙 이름이며, 파서가 만드는 노드에
+# 그대로 붙는다.
+#
+# 같은 뜻인데 이름이 다른 이유는 문법을 언어마다 다른 사람이 만들었고 각자
+# 자기 언어 명세의 용어를 따라갔기 때문이다. Java 명세는 `MethodInvocation`,
+# ECMAScript 명세는 `CallExpression`, C# 명세는 `invocation_expression`,
+# Python 문법 참조는 `call`을 쓴다. 다만 최종 권위는 명세가 아니라
+# `grammar.js`이므로 문법 작성자가 다르게 정하면 이름도 달라진다.
+#
+# ── 문법 크레이트를 올릴 때 ────────────────────────────────────────
+#
+# 이 파일은 크레이트 버전에 종속된다. 전부 1.0 이전이라 규칙 이름이 바뀔 수
+# 있고, 바뀌면 탐지가 오류 없이 조용히 멈춘다. 버전을 올린 뒤에는 반드시
+# `cargo test`를 돌린다. `detects_api_calls_in_every_supported_language`가
+# 네 언어를 실제로 파싱해 보므로 이름이 달라지면 그 자리에서 실패한다.
 #
 # 이름만이 아니라 구조도 다르다. TypeScript는 `function` 필드 아래에 수신자와
 # 메서드가 있는데 Java는 호출식 자체가 `object`와 `name`을 직접 갖는다.
