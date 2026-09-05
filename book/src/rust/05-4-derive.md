@@ -7,9 +7,18 @@
 
 ## 반복되는 구현을 자동으로 만듭니다
 
-`Clone`을 직접 구현하면 이렇습니다.
+[1.4장](01-4-clone.md)에서 `.clone()`으로 값을 복사했습니다. 그런데 아무
+타입에나 `.clone()`을 부를 수 있는 것은 아닙니다. **그 타입이 `Clone`
+트레이트를 구현하고 있어야 합니다**([5.2장](05-2-traits.md)).
+
+`Span`에 `Clone`을 직접 구현하면 이렇게 됩니다.
 
 ```rust
+pub struct Span {
+    pub start_line: u32,
+    pub end_line: u32,
+}
+
 impl Clone for Span {
     fn clone(&self) -> Self {
         Span {
@@ -20,8 +29,12 @@ impl Clone for Span {
 }
 ```
 
-필드를 하나씩 복사하는 단순한 코드입니다. 필드가 열 개면 열 줄이 됩니다.
-`#[derive]`를 쓰면 한 줄입니다.
+`clone` 메서드가 하는 일은 필드를 하나씩 새 `Span`에 그대로 복사하는 것뿐입니다.
+필드가 열 개라면 열 줄을 적어야 하는데 내용은 전부 같은 모양입니다.
+
+이런 코드를 사람이 적을 이유가 없습니다. 구조체 위에 `#[derive(Clone)]`을
+한 줄 붙이면 **컴파일러가 위의 `impl Clone for Span` 블록을 대신 만들어
+넣습니다.**
 
 ```rust
 #[derive(Clone)]
@@ -31,7 +44,9 @@ pub struct Span {
 }
 ```
 
-컴파일러가 같은 코드를 자동으로 만듭니다.
+두 코드는 결과가 같습니다. `#[derive(Clone)]`을 붙인 `Span`에 `.clone()`을
+부르면 컴파일러가 만들어 둔 `clone` 메서드가 실행됩니다. 직접 적은 여덟 줄이
+한 줄로 줄어든 것입니다.
 
 ## 자주 쓰는 것들
 
