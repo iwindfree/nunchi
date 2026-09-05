@@ -68,6 +68,18 @@ pub struct LangSyntax {
     pub string: Vec<String>,
     /// 람다와 함수 리터럴 노드 이름. 인자에 있으면 핸들러 등록으로 본다.
     pub lambda: Vec<String>,
+    /// 문자열을 이어 붙이는 식의 노드 이름. `"/api/x/" + id` 형태를 읽는다.
+    #[serde(default)]
+    pub concat: Vec<String>,
+    /// 이름에 값을 묶는 선언 노드 이름. 상수 URL을 따라가는 데 쓴다.
+    #[serde(default)]
+    pub declaration: Vec<String>,
+    /// 선언에서 이름을 가리키는 필드
+    #[serde(default)]
+    pub declaration_name_field: String,
+    /// 선언에서 값을 가리키는 필드
+    #[serde(default)]
+    pub declaration_value_field: String,
     /// 실인자를 한 겹 더 감싸는 노드가 있으면 그 이름. C#의 `argument`가 그렇다.
     #[serde(default)]
     pub arg_wrapper: Option<String>,

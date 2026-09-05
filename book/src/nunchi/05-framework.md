@@ -432,6 +432,59 @@ pub fn has_dynamic_segment(raw: &str) -> bool {
 이런 경우를 연결 실패로 세면 지표가 왜곡되므로 `dynamic`으로 따로
 집계합니다.
 
+### 리터럴이 아닌 URL을 읽습니다
+
+경로가 문자열 리터럴로 그대로 적혀 있는 경우는 많지 않습니다. Java 백엔드는
+특히 상수로 빼는 관례가 강합니다.
+
+```java
+private static final String BASE = "/api/orders";
+rest.getForObject(BASE + "/" + id, OrderDto.class);
+```
+
+선언을 따라가지 않으면 호출 자리에 `BASE`라는 이름만 남아 경로를 알 수
+없습니다. 그래서 파일을 한 번 훑어 이름에 묶인 문자열을 표로 모아 둡니다.
+
+```rust
+fn string_constants(
+    root: Node,
+    src: &[u8],
+    syntax: &crate::rules::LangSyntax,
+) -> std::collections::HashMap<String, String>
+```
+
+**같은 파일 안에서만 찾는 것이 중요합니다.** `BASE`나 `API_URL` 같은 이름은
+짧고 흔해서, 파일을 넘나들며 치환하면 다른 파일의 값을 잘못 가져옵니다.
+
+연결식은 재귀로 내려갑니다.
+
+```rust
+if syntax.concat.iter().any(|k| k == node.kind()) {
+    if let (Some(left), Some(right)) = (
+        node.child_by_field_name("left"),
+        node.child_by_field_name("right"),
+    ) {
+        collect_url_parts_with(left, src, syntax, constants, out, saw_literal);
+        collect_url_parts_with(right, src, syntax, constants, out, saw_literal);
+        return;
+    }
+}
+```
+
+`"/api/articles/" + slug + "/comments"`가 트리에서 왼쪽으로 중첩되기
+때문입니다. 처음에는 왼쪽을 한 겹만 봤는데, 그러면 최상위의 왼쪽이 또
+연결식이라 리터럴을 찾지 못하고 **호출을 통째로 놓쳤습니다.**
+
+변수 자리에는 `${}`를 남깁니다. 앞에서 본 `normalize_route_path`가 그것을
+`{}`로 바꾸므로, 프런트엔드의 템플릿 문자열과 같은 결과가 됩니다.
+
+리터럴을 하나도 만나지 못하면 버립니다. `getForObject(url, ...)`처럼 변수만
+넘긴 경우인데, 어떤 경로인지 알 수 없으면서 좌표를 주는 것보다 낫습니다.
+
+실측하면 전형적인 아홉 가지 형태 중 여섯 가지를 읽습니다. 남은 셋은
+설정에서 주입받는 값과 빌더 체이닝, 함수 반환값이며 정적으로는 알 수
+없습니다.
+
 ### SQL에서 테이블을 뽑습니다
 
 ```rust

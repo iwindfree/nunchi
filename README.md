@@ -110,9 +110,19 @@ API 호출은 프런트엔드만 하는 것이 아닙니다. 백엔드도 다른
 API를 부르므로 네 언어에서 모두 탐지합니다. 서비스 사이의 호출도 같은
 `calls_api` 관계로 이어집니다.
 
-다만 메서드를 이어 부르는 형태는 아직 읽지 못합니다. Spring `WebClient`의
-`get().uri("/api/x")`나 OkHttp의 요청 빌더가 그런 경우입니다. URL이 변수
-하나로만 들어가는 호출도 정적으로 알 수 없어 건너뜁니다.
+URL이 리터럴이 아니어도 상당 부분 읽습니다. 문자열을 이어 붙인 경로,
+같은 파일에 선언된 상수와 지역 변수, `String.format`의 형식 문자열을
+따라갑니다.
+
+```java
+private static final String BASE = "/api/orders";
+rest.getForObject(BASE + "/" + id, OrderDto.class);   // /api/orders/{}
+```
+
+다만 값이 코드 밖에 있으면 알 수 없습니다. `@Value("${order.api.base}")`로
+설정에서 주입받는 경로가 그렇습니다. 메서드를 이어 부르는 형태도 읽지
+못합니다. Spring `WebClient`의 `get().uri("/api/x")`나 OkHttp의 요청 빌더가
+그런 경우입니다.
 
 프레임워크별로 인식하는 표시는 다음과 같습니다.
 

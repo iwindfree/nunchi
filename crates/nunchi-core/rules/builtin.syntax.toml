@@ -54,6 +54,10 @@ lambda = [
     "function",
     "function_declaration",
 ]
+concat = ["binary_expression"]
+declaration = ["variable_declarator"]
+declaration_name_field = "name"
+declaration_value_field = "value"
 member_is_call = false
 
 [[lang_syntax]]
@@ -69,6 +73,10 @@ lambda = [
     "function",
     "function_declaration",
 ]
+concat = ["binary_expression"]
+declaration = ["variable_declarator"]
+declaration_name_field = "name"
+declaration_value_field = "value"
 member_is_call = false
 
 # ── Python ────────────────────────────────────────────────────────
@@ -81,6 +89,10 @@ receiver_field = "object"
 method_field = "attribute"
 string = ["string", "concatenated_string"]
 lambda = ["lambda"]
+concat = ["binary_operator"]
+declaration = ["assignment"]
+declaration_name_field = "left"
+declaration_value_field = "right"
 member_is_call = false
 
 # ── Java ──────────────────────────────────────────────────────────
@@ -94,6 +106,10 @@ receiver_field = "object"
 method_field = "name"
 string = ["string_literal"]
 lambda = ["lambda_expression"]
+concat = ["binary_expression"]
+declaration = ["variable_declarator"]
+declaration_name_field = "name"
+declaration_value_field = "value"
 member_is_call = true
 
 # ── C# ────────────────────────────────────────────────────────────
@@ -113,4 +129,8 @@ string = [
 ]
 lambda = ["lambda_expression", "anonymous_method_expression"]
 arg_wrapper = "argument"
+concat = ["binary_expression"]
+declaration = ["variable_declarator"]
+declaration_name_field = "name"
+declaration_value_field = "value"
 member_is_call = false

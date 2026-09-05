@@ -653,7 +653,10 @@ pub fn extract_api_calls(
     let Some(syntax) = rules.lang_syntax(lang) else {
         return out;
     };
-    walk_calls(root, src, &clients, &syntax, &mut out);
+    // 파일을 한 번 훑어 이름에 묶인 문자열을 모아 둔다. 호출 자리에 이름만
+    // 있을 때 이 표에서 값을 찾는다.
+    let constants = string_constants(root, src, syntax);
+    walk_calls(root, src, &clients, syntax, &constants, &mut out);
     out
 }
 
@@ -662,16 +665,17 @@ fn walk_calls(
     src: &[u8],
     clients: &[&crate::rules::HttpClientRule],
     syntax: &crate::rules::LangSyntax,
+    constants: &std::collections::HashMap<String, String>,
     out: &mut Vec<ApiCallFact>,
 ) {
     if syntax.call.iter().any(|k| k == node.kind()) {
-        if let Some(fact) = api_call_of(node, src, clients, syntax) {
+        if let Some(fact) = api_call_of(node, src, clients, syntax, constants) {
             out.push(fact);
         }
     }
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        walk_calls(child, src, clients, syntax, out);
+        walk_calls(child, src, clients, syntax, constants, out);
     }
 }
 
@@ -699,6 +703,7 @@ fn api_call_of(
     src: &[u8],
     clients: &[&crate::rules::HttpClientRule],
     syntax: &crate::rules::LangSyntax,
+    constants: &std::collections::HashMap<String, String>,
 ) -> Option<ApiCallFact> {
     let (receiver, callee) = callee_of(call, src, syntax)?;
 
@@ -743,7 +748,7 @@ fn api_call_of(
         return None;
     }
 
-    let raw = url_argument_at(args, src, url_arg, syntax)?;
+    let raw = url_argument_at(args, src, url_arg, syntax, constants)?;
     // 도메인 경로처럼 보이지 않으면 버린다. `useState("")` 같은 오탐 방지.
     if !raw.starts_with('/') && !raw.contains("/api") {
         return None;
@@ -774,7 +779,13 @@ fn has_function_argument(args: Node, syntax: &crate::rules::LangSyntax) -> bool 
 }
 
 /// `index`번째 실인자에서 URL 문자열을 뽑는다.
-fn url_argument_at(args: Node, src: &[u8], index: usize, syntax: &crate::rules::LangSyntax) -> Option<String> {
+fn url_argument_at(
+    args: Node,
+    src: &[u8],
+    index: usize,
+    syntax: &crate::rules::LangSyntax,
+    constants: &std::collections::HashMap<String, String>,
+) -> Option<String> {
     let mut cursor = args.walk();
     let mut position = 0usize;
     for arg in args.children(&mut cursor) {
@@ -782,7 +793,7 @@ fn url_argument_at(args: Node, src: &[u8], index: usize, syntax: &crate::rules::
             continue;
         }
         if position == index {
-            return literal_url(unwrap_argument(arg, syntax), src, syntax);
+            return literal_url(unwrap_argument(arg, syntax), src, syntax, constants);
         }
         position += 1;
     }
@@ -795,22 +806,168 @@ fn url_argument_at(args: Node, src: &[u8], index: usize, syntax: &crate::rules::
 /// 그 리터럴이 슬래시로 끝나면 세그먼트 하나가 통째로 치환되는 형태이므로
 /// `{}`를 붙여 라우트와 맞춘다. 그렇지 않으면 어떤 경로가 되는지 알 수 없으므로
 /// `${}`를 붙여 동적으로 표시한다.
-fn literal_url(node: Node, src: &[u8], syntax: &crate::rules::LangSyntax) -> Option<String> {
-    if syntax.string.iter().any(|k| k == node.kind()) {
-        return Some(strip_string_affixes(text(node, src)));
+fn literal_url(
+    node: Node,
+    src: &[u8],
+    syntax: &crate::rules::LangSyntax,
+    constants: &std::collections::HashMap<String, String>,
+) -> Option<String> {
+    let mut url = String::new();
+    let mut saw_literal = false;
+    collect_url_parts_with(node, src, syntax, Some(constants), &mut url, &mut saw_literal);
+    // 리터럴이 하나도 없으면 `getForObject(url, ...)` 처럼 변수만 넘긴 것이다.
+    // 어떤 경로인지 정적으로 알 수 없으므로 버린다.
+    saw_literal.then_some(url)
+}
+
+/// 파일 안에서 이름에 묶인 문자열 값을 모은다.
+///
+/// Java 백엔드는 경로를 `private static final String BASE = "/api/orders"`처럼
+/// 상수로 빼는 관례가 강하다. 그 선언을 따라가지 않으면 호출 자리에 이름만
+/// 남아 있어 경로를 알 수 없다.
+///
+/// 같은 파일 안에서만 찾는다. 이름은 짧고 흔해서(`BASE`, `API_URL`) 파일을
+/// 넘나들며 치환하면 다른 파일의 값을 잘못 가져올 수 있다.
+fn string_constants(
+    root: Node,
+    src: &[u8],
+    syntax: &crate::rules::LangSyntax,
+) -> std::collections::HashMap<String, String> {
+    let mut table = std::collections::HashMap::new();
+    if syntax.declaration.is_empty() {
+        return table;
     }
-    if node.kind() == "binary_expression" {
-        let left = node.child_by_field_name("left")?;
-        if syntax.string.iter().any(|k| k == left.kind()) {
-            let head = strip_string_affixes(text(left, src));
-            return Some(if head.ends_with('/') {
-                format!("{head}{{}}")
-            } else {
-                format!("{head}${{}}")
-            });
+    collect_declarations(root, src, syntax, &mut table);
+    table
+}
+
+fn collect_declarations(
+    node: Node,
+    src: &[u8],
+    syntax: &crate::rules::LangSyntax,
+    table: &mut std::collections::HashMap<String, String>,
+) {
+    if syntax.declaration.iter().any(|k| k == node.kind()) {
+        let name = node.child_by_field_name(&syntax.declaration_name_field);
+        let value = node.child_by_field_name(&syntax.declaration_value_field);
+        if let (Some(name), Some(value)) = (name, value) {
+            let mut text_out = String::new();
+            let mut saw_literal = false;
+            collect_url_parts(value, src, syntax, &mut text_out, &mut saw_literal);
+            if saw_literal {
+                // 같은 이름이 여러 번 선언되면 첫 번째를 쓴다. 재대입까지
+                // 추적하려면 흐름 분석이 필요하고, 그만한 이득이 없다.
+                table
+                    .entry(text(name, src).to_string())
+                    .or_insert(text_out);
+            }
         }
     }
-    None
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_declarations(child, src, syntax, table);
+    }
+}
+
+/// 연결식을 훑어 경로를 조립한다.
+///
+/// 리터럴은 그대로 쓰고 변수 자리에는 `${}`를 남긴다. 그 표시를
+/// `has_dynamic_segment`가 읽어 세그먼트 하나가 통째로 치환되는 형태인지
+/// 판정하고, `normalize_route_path`가 `{}`로 정규화한다. TypeScript 템플릿
+/// 문자열이 이미 그 경로를 타므로 형태를 맞춘 것이다.
+///
+/// `"/api/articles/" + slug + "/comments"`는 왼쪽으로 중첩되므로 재귀로 내려간다.
+/// 왼쪽을 한 겹만 보면 리터럴을 찾지 못해 호출을 통째로 놓친다.
+fn collect_url_parts(
+    node: Node,
+    src: &[u8],
+    syntax: &crate::rules::LangSyntax,
+    out: &mut String,
+    saw_literal: &mut bool,
+) {
+    collect_url_parts_with(node, src, syntax, None, out, saw_literal)
+}
+
+fn collect_url_parts_with(
+    node: Node,
+    src: &[u8],
+    syntax: &crate::rules::LangSyntax,
+    constants: Option<&std::collections::HashMap<String, String>>,
+    out: &mut String,
+    saw_literal: &mut bool,
+) {
+    if syntax.string.iter().any(|k| k == node.kind()) {
+        out.push_str(&strip_string_affixes(text(node, src)));
+        *saw_literal = true;
+        return;
+    }
+    if syntax.concat.iter().any(|k| k == node.kind()) {
+        if let (Some(left), Some(right)) = (
+            node.child_by_field_name("left"),
+            node.child_by_field_name("right"),
+        ) {
+            collect_url_parts_with(left, src, syntax, constants, out, saw_literal);
+            collect_url_parts_with(right, src, syntax, constants, out, saw_literal);
+            return;
+        }
+    }
+    // `String.format("/api/orders/%s", id)` 처럼 형식 문자열로 만드는 경우
+    // 첫 인자가 곧 경로다. 자리 표시자를 `${}`로 바꿔 두면 아래 정규화가
+    // 나머지를 처리한다.
+    if syntax.call.iter().any(|k| k == node.kind()) {
+        if let Some(args) = node.child_by_field_name("arguments") {
+            let mut cursor = args.walk();
+            if let Some(first) = args
+                .children(&mut cursor)
+                .map(|a| unwrap_argument(a, syntax))
+                .find(|a| syntax.string.iter().any(|k| k == a.kind()))
+            {
+                let raw = strip_string_affixes(text(first, src));
+                if raw.starts_with('/') {
+                    out.push_str(&format_placeholders(&raw));
+                    *saw_literal = true;
+                    return;
+                }
+            }
+        }
+    }
+    // 이름이면 같은 파일의 선언에서 값을 찾아본다.
+    if let Some(table) = constants {
+        if let Some(value) = table.get(text(node, src)) {
+            out.push_str(value);
+            *saw_literal = true;
+            return;
+        }
+    }
+    // 변수나 함수 호출 — 무엇이 들어올지 알 수 없다.
+    out.push_str("${}");
+}
+
+/// 형식 문자열의 자리 표시자를 `${}`로 바꾼다.
+///
+/// `%s`와 `%d`는 `String.format`과 파이썬 `%` 연산자가, `{}`와 `{0}`은
+/// 파이썬 `.format`과 C# 보간이 쓴다.
+fn format_placeholders(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut chars = raw.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '%' if chars.peek().is_some_and(|c| c.is_ascii_alphabetic()) => {
+                chars.next();
+                out.push_str("${}");
+            }
+            '{' => {
+                for c in chars.by_ref() {
+                    if c == '}' {
+                        break;
+                    }
+                }
+                out.push_str("${}");
+            }
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 /// 문자열 리터럴의 접두와 따옴표를 벗긴다.
@@ -1192,6 +1349,80 @@ public class OrderController : ControllerBase
         assert_eq!(calls.len(), 1, "{calls:?}");
         assert_eq!(calls[0].path, "/api/articles/{}");
         assert!(!calls[0].dynamic, "세그먼트 전체 치환은 동적이 아니다");
+    }
+
+    #[test]
+    fn java_concat_keeps_the_tail_after_the_parameter() {
+        // `"/api/articles/" + slug + "/comments"` 는 트리에서 왼쪽으로 중첩되므로
+        // 최상위 연결식의 왼쪽이 또 연결식이다. 왼쪽만 한 겹 보던 시절에는
+        // 리터럴을 찾지 못해 이 호출을 통째로 놓쳤다.
+        let calls = calls_in(
+            "java",
+            tree_sitter_java::LANGUAGE.into(),
+            r#"class C { void m() { rest.getForObject("/api/articles/" + slug + "/comments", String.class); } }"#,
+        );
+        assert_eq!(calls.len(), 1, "{calls:?}");
+        assert_eq!(calls[0].path, "/api/articles/{}/comments");
+    }
+
+    #[test]
+    fn java_follows_constants_and_locals_in_the_same_file() {
+        // Java 백엔드는 경로를 상수로 빼는 관례가 강하다. 선언을 따라가지
+        // 않으면 호출 자리에 이름만 남아 경로를 알 수 없다.
+        let calls = calls_in(
+            "java",
+            tree_sitter_java::LANGUAGE.into(),
+            r#"
+class Gateway {
+    private static final String BASE = "/api/orders";
+    void a() { rest.getForObject(BASE, List.class); }
+    void b() { rest.getForObject(BASE + "/" + id, OrderDto.class); }
+    void c() {
+        String url = "/api/orders/summary";
+        rest.getForObject(url, List.class);
+    }
+}"#,
+        );
+        let paths: Vec<&str> = calls.iter().map(|c| c.path.as_str()).collect();
+        assert_eq!(
+            paths,
+            ["/api/orders", "/api/orders/{}", "/api/orders/summary"],
+            "{calls:?}"
+        );
+    }
+
+    #[test]
+    fn string_format_becomes_a_path_parameter() {
+        let calls = calls_in(
+            "java",
+            tree_sitter_java::LANGUAGE.into(),
+            r#"class C { void m() { rest.getForObject(String.format("/api/orders/%s", id), O.class); } }"#,
+        );
+        assert_eq!(calls.len(), 1, "{calls:?}");
+        assert_eq!(calls[0].path, "/api/orders/{}");
+    }
+
+    #[test]
+    fn a_url_that_is_only_a_variable_is_skipped() {
+        // 값이 어디서 오는지 알 수 없으면 잘못된 좌표를 주는 것보다 버리는 편이 낫다.
+        let calls = calls_in(
+            "java",
+            tree_sitter_java::LANGUAGE.into(),
+            r#"class C { void m() { rest.getForObject(props.getOrderUrl(), List.class); } }"#,
+        );
+        assert!(calls.is_empty(), "{calls:?}");
+    }
+
+    #[test]
+    fn constants_do_not_leak_across_files() {
+        // 상수 이름은 짧고 흔하다. 파일을 넘나들며 치환하면 다른 파일의 값을
+        // 가져올 수 있으므로 같은 파일 안에서만 찾는다.
+        let calls = calls_in(
+            "java",
+            tree_sitter_java::LANGUAGE.into(),
+            r#"class C { void m() { rest.getForObject(BASE, List.class); } }"#,
+        );
+        assert!(calls.is_empty(), "선언이 없는 이름을 치환했다: {calls:?}");
     }
 
     #[test]
