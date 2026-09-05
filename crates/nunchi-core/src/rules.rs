@@ -140,8 +140,9 @@ pub struct PersistenceRule {
     pub repository_supertypes: Vec<String>,
 }
 
-/// 내장 기본 규칙. 설정이 비어 있어도 Spring + React가 바로 동작한다.
 /// Built-in default rules, defined in `rules/builtin.toml`.
+///
+/// These make Spring and React work out of the box with an empty config.
 ///
 /// The rules live in a data file rather than in Rust source on purpose. Adding a
 /// rule only states a fact — "this annotation means this HTTP method" — but in
