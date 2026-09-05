@@ -8,6 +8,50 @@
 미리 계산해 둔 그래프에 질의하여 **압축된 사실과 정확한 좌표**(`path:line`)를
 받도록 만듭니다.
 
+## 무엇을 하는가
+
+프런트엔드와 백엔드가 서로 다른 저장소에 있는 상황을 예로 듭니다.
+
+```typescript
+// frontend 저장소의 api.ts
+axios.get(`/api/articles/${slug}`);
+```
+
+```java
+// backend 저장소의 ArticleController.java
+@GetMapping("/{slug}")
+public ArticleDto get(String slug) { ... }
+```
+
+두 코드는 서로를 가리키는 표시가 전혀 없습니다. 파일 이름도 다르고 저장소도
+다르므로 grep으로는 이어 볼 수 없습니다. nunchi는 경로 표기를 정규화하여
+양쪽을 하나의 그래프로 잇습니다.
+
+```mermaid
+flowchart LR
+    subgraph FE["frontend 저장소"]
+        AC["ApiCall<br/>GET /api/articles/{}"]
+    end
+    subgraph BE["backend 저장소"]
+        RT["Route<br/>GET /api/articles/{}"]
+        SM["Symbol<br/>ArticleController.get"]
+        SV["Symbol<br/>ArticleService.findBySlug"]
+        TB[("Table<br/>articles")]
+    end
+    AC -->|calls_api| RT
+    RT -->|handles| SM
+    SM -->|calls| SV
+    SV -->|persists_to| TB
+```
+
+사각형이 **노드**이고 화살표가 **엣지**입니다. 노드는 코드에 있는 것이며
+저장소, 파일, 심볼, 라우트, API 호출, 테이블 등 열여덟 종류가 있습니다.
+엣지는 그 사이의 관계이며 열아홉 종류가 있습니다.
+
+에이전트가 "게시글 조회가 안 된다"고 물으면 nunchi는 이 경로를 따라가며
+관련된 좌표만 골라 돌려줍니다. 전체 노드와 엣지 목록은
+[학습용 책 2권 0장](book/src/nunchi/00-map.md)에 정리해 두었습니다.
+
 ## 빠른 시작
 
 ```bash
@@ -50,13 +94,35 @@ Rust 1.90 이상이 필요합니다. macOS와 Windows에서 각각 네이티브�
 
 ## 지원 범위
 
-| 언어 | 심볼 | 라우트 | 의존성 주입 | 영속 계층 |
-|---|---|---|---|---|
-| Java | 지원 | Spring | 지원 | JPA, MyBatis(어노테이션과 XML) |
-| TypeScript, JavaScript | 지원 | 일부 | 없음 | 없음 |
-| Python | 지원 | FastAPI, Flask | 없음 | SQLAlchemy |
-| C# | 지원 (partial 병합) | ASP.NET | 없음 | 없음 |
-| Rust | 지원 | 없음 | 없음 | 없음 |
+2026년 9월 기준입니다. 실제로 적용 중인 규칙은 `nunchi rules`로 확인하실 수
+있습니다.
+
+| 언어 | 심볼 추출 | 라우트 정의 | 의존성 주입 | 영속 계층 | API 호출 탐지 |
+|---|---|---|---|---|---|
+| Java | 지원 | Spring | Spring | JPA, MyBatis | 없음 |
+| TypeScript | 지원 | 없음 | 없음 | 없음 | 지원 |
+| JavaScript | 지원 | 없음 | 없음 | 없음 | 지원 |
+| Python | 지원 | FastAPI, Flask | 없음 | SQLAlchemy | 지원 |
+| C# | 지원 (partial 병합) | ASP.NET | 없음 | 없음 | 지원 |
+| Rust | 지원 | 없음 | 없음 | 없음 | 없음 |
+
+프레임워크별로 인식하는 표시는 다음과 같습니다.
+
+| 항목 | 인식하는 것 |
+|---|---|
+| Spring 라우트 | `@GetMapping`, `@PostMapping`, `@PutMapping`, `@DeleteMapping`, `@PatchMapping`, `@RequestMapping` |
+| Spring Bean | `@RestController`, `@Controller`, `@Service`, `@Repository`, `@Component`, `@Configuration` |
+| Spring 주입 | `@Autowired`, `@Inject`, `final` 필드, 생성자 파라미터 |
+| JPA | `@Entity`, `@Table` |
+| MyBatis | `@Select`, `@Insert`, `@Update`, `@Delete`와 XML 매퍼 파일 |
+| FastAPI, Flask | `@get`부터 `@patch`까지의 데코레이터와 `@route` |
+| SQLAlchemy | `__tablename__` |
+| ASP.NET | `[HttpGet]` 계열 다섯 가지와 `[Route]`, `[ApiController]` |
+| HTTP 클라이언트 | `fetch`, `.get()`부터 `.patch()`까지의 메서드 호출, C#의 `GetAsync` 계열 |
+
+라우트 정의가 없는 언어에서도 API 호출은 탐지하므로, 프런트엔드가 어느
+엔드포인트를 부르는지는 알 수 있습니다. 위 표에서 TypeScript와 JavaScript가
+그런 경우입니다.
 
 프레임워크 지원은 설정 파일에 규칙을 추가하여 넓힐 수 있습니다. 바이너리를
 다시 빌드할 필요가 없습니다. 자세한 방법은 [사용 안내서](docs/GUIDE.md)에
