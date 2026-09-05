@@ -79,28 +79,104 @@ flowchart TD
 
 ## 데이터 모델
 
-그래프에 무엇이 들어가는지 알아야 나머지가 이해됩니다.
+그래프에 무엇이 들어가는지 알아야 나머지가 이해됩니다. 그래프는 **노드**와
+**엣지** 두 가지로만 이루어집니다. 노드는 코드에 있는 것이고, 엣지는 노드
+사이의 관계입니다.
 
-**노드**는 코드에 있는 것들입니다. 저장소, 파일, 심볼, 라우트, API 호출,
-커밋, 저자, 테이블 등 열여덟 종류가 있습니다.
+### 노드는 코드에 있는 것입니다
 
-**엣지**는 그것들 사이의 관계입니다.
+노드 종류가 열여덟 가지인데, 자주 보게 될 것은 여섯 가지입니다.
+
+| 노드 | 무엇을 가리키는가 | 예 |
+|---|---|---|
+| `Repo` | 인덱싱 대상 저장소 하나입니다 | `backend`, `frontend` |
+| `File` | 소스 파일 하나입니다 | `ArticleController.java` |
+| `Symbol` | 파일 안에 선언된 이름 하나입니다. 클래스와 메서드와 함수와 필드가 모두 여기 해당합니다 | `ArticleController`, `findBySlug` |
+| `Route` | 서버가 받는 HTTP 엔드포인트 하나입니다. 메서드와 경로를 짝지은 것입니다 | `GET /api/articles/{}` |
+| `ApiCall` | 클라이언트가 서버를 부르는 코드 한 군데입니다 | `axios.get('/api/articles/...')` |
+| `Table` | 데이터베이스 테이블 하나입니다 | `articles` |
+
+나머지 열두 가지는 `Commit`, `Author`, `Bean`, `Entity`, `ExternalDep` 등이며
+해당하는 장에서 그때 설명합니다.
+
+### 엣지는 노드 사이의 관계입니다
+
+엣지에는 방향이 있습니다. **화살표는 출발점에서 도착점으로 읽습니다.**
+예를 들어 `Repo -->|contains| File`은 "저장소가 파일을 담고 있다"는 뜻입니다.
+
+| 엣지 | 어디에서 어디로 | 뜻 |
+|---|---|---|
+| `contains` | `Repo` → `File`, `File` → `Symbol` | 담고 있습니다 |
+| `calls` | `Symbol` → `Symbol` | 이 함수가 저 함수를 부릅니다 |
+| `injects` | `Symbol` → `Symbol` | 의존성 주입으로 받습니다. Spring의 `@Autowired`가 이것입니다 |
+| `handles` | `Route` → `Symbol` | 이 엔드포인트로 온 요청을 저 함수가 처리합니다 |
+| `calls_api` | `ApiCall` → `Route` | 클라이언트의 이 호출이 저 엔드포인트로 갑니다 |
+| `persists_to` | `Symbol` → `Table` | 이 함수가 저 테이블을 읽거나 씁니다 |
+| `co_changed_with` | `File` → `File` | git 이력에서 두 파일이 자주 함께 바뀌었습니다 |
+
+**같은 종류의 노드끼리도 관계가 생깁니다.** 함수가 다른 함수를 부르므로
+`Symbol`에서 `Symbol`로 가는 엣지가 있고, 파일이 다른 파일과 함께 바뀌므로
+`File`에서 `File`로 가는 엣지가 있습니다.
+
+### 실제 코드로 보면
+
+백엔드와 프런트엔드가 서로 다른 저장소에 있는 상황입니다.
+
+```java
+// backend 저장소의 ArticleController.java
+@RestController
+@RequestMapping("/api/articles")
+public class ArticleController {
+
+    private final ArticleService articleService;
+
+    @GetMapping("/{slug}")
+    public ArticleDto get(String slug) {
+        return articleService.findBySlug(slug);
+    }
+}
+```
+
+```typescript
+// frontend 저장소의 api.ts
+export const getArticle = (slug: string) =>
+  axios.get(`/api/articles/${slug}`);
+```
+
+이 두 파일이 그래프에서 이렇게 됩니다.
 
 ```mermaid
 flowchart LR
-    R[Repo] -->|contains| F[File]
-    F -->|contains| S[Symbol]
-    S -->|calls| S2[Symbol]
-    S -->|injects| S3[Symbol]
-    RT[Route] -->|handles| S
-    AC[ApiCall] -->|calls_api| RT
-    S -->|persists_to| T[(Table)]
-    F -->|co_changed_with| F2[File]
+    subgraph FE["frontend 저장소"]
+        F2["File<br/>api.ts"]
+        SG["Symbol<br/>getArticle"]
+        AC["ApiCall<br/>GET /api/articles/{}"]
+    end
+    subgraph BE["backend 저장소"]
+        F1["File<br/>ArticleController.java"]
+        SC["Symbol<br/>ArticleController"]
+        SM["Symbol<br/>get"]
+        SV["Symbol<br/>ArticleService"]
+        RT["Route<br/>GET /api/articles/{}"]
+    end
+    F2 -->|contains| SG
+    F2 -->|contains| AC
+    F1 -->|contains| SC
+    F1 -->|contains| SM
+    SC -->|injects| SV
+    SM -->|calls| SV
+    RT -->|handles| SM
+    AC -->|calls_api| RT
 ```
 
-`calls_api`가 이 프로젝트의 핵심입니다. React의 `fetch` 호출과 Spring의
-`@GetMapping`을 잇습니다. 두 저장소에 흩어진 코드를 연결하므로 grep으로는
-얻을 수 없는 정보입니다.
+**이 그림에서 가장 중요한 것은 두 저장소를 잇는 `calls_api` 화살표
+하나입니다.** `axios.get`이 있는 줄에서 출발해 `calls_api`와 `handles`를
+거치면 백엔드의 `get` 메서드에 도착합니다. 두 저장소에 흩어져 있고 코드에
+서로를 가리키는 표시가 전혀 없으므로, grep으로는 찾을 수 없는 연결입니다.
+
+에이전트가 "게시글 조회가 안 된다"고 물으면 nunchi는 이 경로를 따라가며
+프런트엔드의 호출부와 백엔드의 핸들러와 그 핸들러가 부르는 서비스까지
+한 번에 좌표로 돌려줍니다.
 
 ## 두 가지 실행 경로
 
