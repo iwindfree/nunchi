@@ -8,18 +8,18 @@ MCP 서버에만 나오는 두 가지입니다. nunchi 전체에서 `async fn`�
 
 ## `Arc`는 여러 곳이 같은 값을 공유하게 합니다
 
-[1.1장](01-1-ownership.md)에서 "주인은 하나"라고 했습니다. 그런데 여러 곳이
+[1.1장](01-1-ownership.md)에서 "소유자는 하나"라고 했습니다. 그런데 여러 곳이
 같은 값을 봐야 하고, 그중 누가 마지막까지 살아 있을지 미리 알 수 없는 경우가
 있습니다.
 
-`Arc`는 **주인을 여럿으로 만듭니다.** 대신 몇 곳에서 갖고 있는지 세어 두고,
+`Arc`는 **소유자를 여럿으로 만듭니다.** 대신 몇 곳에서 갖고 있는지 세어 두고,
 0이 되면 값을 없앱니다.
 
 ```rust
 use std::sync::Arc;
 
 let shared = Arc::new(big_data);
-let a = Arc::clone(&shared);      // 주인이 둘이 됩니다
+let a = Arc::clone(&shared);      // 소유자가 둘이 됩니다
 let b = Arc::clone(&shared);      // 셋이 됩니다
 ```
 

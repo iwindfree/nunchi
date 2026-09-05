@@ -13,7 +13,7 @@
 ```rust
 let name = String::from("OrderService");
 let length = measure(&name);      // 빌려서 넘깁니다
-println!("{}", name);             // name 은 여전히 주인입니다
+println!("{}", name);             // name 은 여전히 소유자입니다
 
 fn measure(s: &String) -> usize {
     s.len()
@@ -24,7 +24,7 @@ fn measure(s: &String) -> usize {
 됩니다.
 
 ```
-   name (주인)                    힙
+   name (소유자)                    힙
 ┌──────────────┐              ┌─────────────────┐
 │ 주소 ────────┼─────────────▶│ "OrderService"  │
 └──────────────┘              └─────────────────┘
