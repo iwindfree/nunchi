@@ -6,14 +6,25 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <header>
-    <h1>nunchi</h1>
-    <p class="sub">코드베이스 컨텍스트 그래프</p>
-  </header>
+  <div class="shell">
+    <nav class="sidebar">
+      <div class="brand">
+        <span class="mark"></span>
+        <span class="name">nunchi</span>
+      </div>
+      <button class="nav" data-view="overview" aria-current="page">개요</button>
+      <button class="nav" data-view="index">인덱싱</button>
+      <button class="nav" data-view="explore">탐색</button>
+      <button class="nav" data-view="pack">팩</button>
+      <button class="nav" data-view="settings">설정</button>
+      <div class="spacer"></div>
+      <div class="solution" id="solution-label"></div>
+    </nav>
 
-  <main id="app">
-    <p class="loading">불러오는 중입니다.</p>
-  </main>
+    <main id="view">
+      <p class="muted">불러오는 중입니다.</p>
+    </main>
+  </div>
 
   <script type="module" src="main.js"></script>
 </body>
