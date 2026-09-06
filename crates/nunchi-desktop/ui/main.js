@@ -1,7 +1,16 @@
-const { invoke } = window.__TAURI__.core;
+// 프레임워크를 쓰지 않으므로 tauri.conf.json 의 withGlobalTauri 로 주입받는다.
+const invoke = window.__TAURI__?.core?.invoke;
 
-/** 화면 사이에서 공유하는 상태. 인덱싱이 끝나면 다시 불러 갱신한다. */
+/** 지금 열린 솔루션의 개요. 인덱싱이 끝나면 다시 불러 갱신한다. */
 let data = null;
+/** 최근에 연 솔루션 목록. */
+let recent = [];
+
+function setSolutionLabel() {
+  const label = document.getElementById("solution-label");
+  label.textContent = data?.config ? data.config.solution : "솔루션 선택";
+  label.title = "솔루션 바꾸기";
+}
 
 const el = (html) => {
   const t = document.createElement("template");
@@ -18,9 +27,9 @@ const num = (n) => Number(n ?? 0).toLocaleString("ko-KR");
 
 // ── 개요 ────────────────────────────────────────────────
 function overviewView() {
-  if (!data.config) {
-    // 설정이 없으면 개요 대신 마법사를 보여 준다.
-    return setupView();
+  if (!data || !data.config) {
+    // 연 솔루션이 없으면 무엇을 열지 먼저 고르게 한다.
+    return solutionsView();
   }
 
   const c = data.config;
@@ -113,6 +122,92 @@ function languageTable(m) {
 }
 
 
+// ── 솔루션 선택 ──────────────────────────────────────────
+let openError = null;
+
+function solutionsView() {
+  const items = recent.length
+    ? `<ul class="repo-list">${recent
+        .map((e) => {
+          const dir = e.config_path.replace(/[/\\]nunchi\.toml$/, "");
+          return `<li>
+            <div style="flex:1">
+              <div><strong>${esc(e.name)}</strong>${
+                e.exists ? "" : ' <span class="bad">파일이 없습니다</span>'
+              }</div>
+              <div class="muted"><code>${esc(dir)}</code></div>
+            </div>
+            ${
+              e.exists
+                ? `<button class="action" data-open="${esc(e.config_path)}">열기</button>`
+                : ""
+            }
+            <button class="remove" data-forget="${esc(e.config_path)}">목록에서 제거</button>
+          </li>`;
+        })
+        .join("")}</ul>`
+    : `<p class="muted">아직 연 솔루션이 없습니다.</p>`;
+
+  return `
+    <h2>솔루션</h2>
+    <p class="lead">최근에 연 솔루션에서 고르거나 새로 만들 수 있습니다.</p>
+    ${openError ? `<div class="error">${esc(openError)}</div>` : ""}
+    <div class="panel">
+      <h3>최근에 연 솔루션</h3>
+      ${items}
+    </div>
+    <div class="actions">
+      <button class="action" id="open-existing">기존 솔루션 열기</button>
+      <button class="primary" id="new-solution">새 솔루션 만들기</button>
+    </div>
+    <p class="note">기존 솔루션을 열려면 <code>nunchi.toml</code>이 있는 폴더를 고르십시오.</p>`;
+}
+
+async function openSolution(configPath) {
+  openError = null;
+  try {
+    data = await invoke("open_solution", { configPath });
+    recent = await invoke("recent_list");
+    setSolutionLabel();
+    show("overview");
+  } catch (e) {
+    openError = String(e);
+    recent = await invoke("recent_list");
+    show("solutions");
+  }
+}
+
+function bindSolutions() {
+  document.querySelectorAll("[data-open]").forEach((b) =>
+    b.addEventListener("click", () => openSolution(b.dataset.open))
+  );
+  document.querySelectorAll("[data-forget]").forEach((b) =>
+    b.addEventListener("click", async () => {
+      recent = await invoke("forget_solution", { configPath: b.dataset.forget });
+      show("solutions");
+    })
+  );
+  document.getElementById("open-existing")?.addEventListener("click", async () => {
+    openError = null;
+    try {
+      const path = await invoke("open_folder");
+      if (path) await openSolution(path);
+    } catch (e) {
+      openError = String(e);
+      show("solutions");
+    }
+  });
+  document.getElementById("new-solution")?.addEventListener("click", async () => {
+    draft.repos = [];
+    draft.name = "";
+    draft.languages = null;
+    draft.error = null;
+    draft.overwrite = false;
+    draft.dir = "";
+    show("setup");
+  });
+}
+
 // ── 초기 설정 마법사 ─────────────────────────────────────
 /** 설정을 만들기 전까지 들고 있는 입력값. */
 const draft = {
@@ -168,15 +263,15 @@ async function createConfig() {
   draft.error = null;
   show("setup");
   try {
-    const out = await invoke("init_solution", {
+    data = await invoke("init_solution", {
       dir: draft.dir,
       repos: draft.repos,
       name: draft.name,
       force: draft.overwrite,
     });
-    // 설정이 생겼으니 개요를 다시 읽어 화면을 갱신한다.
-    data = await invoke("overview");
-    document.getElementById("solution-label").textContent = out.solution;
+    recent = await invoke("recent_list");
+    draft.busy = false;
+    setSolutionLabel();
     show("overview");
   } catch (e) {
     draft.error = String(e);
@@ -241,8 +336,9 @@ function setupView() {
       <label class="field">
         <span>설정 파일을 만들 위치</span>
         <div class="row">
-          <input type="text" id="dir" value="${esc(draft.dir)}" readonly />
-          <button class="action" id="pick-dir">변경</button>
+          <input type="text" id="dir" value="${esc(draft.dir)}" readonly
+                 placeholder="선택 버튼으로 폴더를 고르십시오" />
+          <button class="action" id="pick-dir">${draft.dir ? "변경" : "선택"}</button>
         </div>
       </label>
       <p class="note">이 위치에 <code>nunchi.toml</code>과 <code>nunchi.shared.toml</code>이 생깁니다.
@@ -253,7 +349,7 @@ function setupView() {
       <button class="primary" id="create" ${ready ? "" : "disabled"}>
         ${draft.busy ? "만드는 중입니다" : draft.overwrite ? "설정 덮어쓰기" : "설정 만들기"}
       </button>
-      ${draft.overwrite ? `<button class="action" id="cancel">취소</button>` : ""}
+      <button class="action" id="cancel">취소</button>
     </div>
     ${
       draft.overwrite
@@ -271,7 +367,8 @@ function bindSetup() {
   document.getElementById("cancel")?.addEventListener("click", () => {
     draft.overwrite = false;
     draft.error = null;
-    show("overview");
+    // 열린 솔루션이 있으면 개요로, 없으면 솔루션 목록으로 돌아간다.
+    show(data ? "overview" : "solutions");
   });
   document.querySelectorAll("[data-remove]").forEach((b) =>
     b.addEventListener("click", () => removeRepo(b.dataset.remove))
@@ -281,12 +378,20 @@ function bindSetup() {
 }
 
 // ── 아직 만들지 않은 화면 ────────────────────────────────
-const soon = (title, note) => `
-  <h2>${title}</h2>
-  <div class="soon">${note}</div>`;
+const soon = (title, note) => {
+  if (!data || !data.config) {
+    return `<h2>${title}</h2>
+      <div class="empty">
+        <strong>먼저 솔루션을 여십시오.</strong>
+        왼쪽 아래의 솔루션 이름을 누르면 목록이 나옵니다.
+      </div>`;
+  }
+  return `<h2>${title}</h2><div class="soon">${note}</div>`;
+};
 
 const views = {
   overview: overviewView,
+  solutions: solutionsView,
   setup: setupView,
   index: () => soon("인덱싱", "다음 단계에서 실행 버튼과 진행 표시를 붙입니다."),
   explore: () => soon("탐색", "심볼과 이웃을 찾는 화면입니다."),
@@ -313,19 +418,45 @@ function show(name) {
     else b.removeAttribute("aria-current");
   });
   document.getElementById("view").innerHTML = views[name]();
-  if (name === "setup" || (name === "overview" && !data.config)) bindSetup();
+  if (name === "setup") bindSetup();
+  if (name === "solutions") bindSolutions();
   document.getElementById("edit-repos")?.addEventListener("click", editRepos);
 }
 
+/** 화면을 띄우지 못한 이유를 그대로 보여 준다. 흰 화면으로 두면 원인을 알 수 없다. */
+function fatal(message) {
+  document.getElementById("view").innerHTML = `
+    <h2>화면을 띄우지 못했습니다</h2>
+    <div class="error">${esc(message)}</div>`;
+}
+
 async function start() {
-  data = await invoke("overview");
-  draft.dir = await invoke("default_dir");
-  const label = document.getElementById("solution-label");
-  label.textContent = data.config ? data.config.solution : "설정 없음";
+  if (!invoke) {
+    fatal("Tauri API 를 찾지 못했습니다. tauri.conf.json 의 withGlobalTauri 설정을 확인하십시오.");
+    return;
+  }
   document.querySelectorAll(".nav").forEach((b) =>
     b.addEventListener("click", () => show(b.dataset.view))
   );
-  show("overview");
+  document.getElementById("solution-label").addEventListener("click", () => show("solutions"));
+
+  let boot;
+  try {
+    boot = await invoke("startup");
+  } catch (e) {
+    fatal(String(e));
+    return;
+  }
+  recent = boot.recent;
+  data = boot.opened;
+  // 마지막에 열었던 솔루션이 있으면 바로 개요를 보여 주고,
+  // 없으면 무엇을 열지 고르는 화면으로 간다.
+  if (data) {
+    setSolutionLabel();
+    show("overview");
+  } else {
+    show("solutions");
+  }
 }
 
 start();

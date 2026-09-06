@@ -4,10 +4,10 @@
 //! 형태로 옮기기만 한다. CLI와 MCP 서버가 같은 함수를 부르므로 세 통로가
 //! 같은 결과를 낸다.
 
-use nunchi_core::config::{CONFIG_FILE, Config};
+use nunchi_core::config::Config;
 use nunchi_core::store::sqlite::SqliteStore;
 use serde::Serialize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Serialize, Default)]
 pub struct Overview {
@@ -45,23 +45,21 @@ pub struct IndexInfo {
     pub metrics: serde_json::Value,
 }
 
-/// 설정 파일을 찾아 인덱스까지 읽는다.
-/// 설정이 없으면 `config`가 비고, 인덱스가 없으면 `index`가 빈다.
-pub fn overview() -> Overview {
-    let Ok(cwd) = std::env::current_dir() else {
-        return Overview {
-            problem: Some("현재 디렉터리를 알 수 없습니다.".into()),
-            ..Default::default()
-        };
-    };
-    let Some(config_path) = Config::discover(&cwd) else {
+/// 지정한 설정 파일을 읽어 솔루션과 인덱스 상태를 만든다.
+///
+/// CLI처럼 현재 디렉터리에서 찾지 않는다. 데스크톱 앱은 어디서 실행될지
+/// 알 수 없으므로 어떤 솔루션을 열었는지 앱이 기억해 두고 그 경로를 넘긴다.
+pub fn overview(config_path: &Path) -> Overview {
+    if !config_path.is_file() {
         return Overview {
             problem: Some(format!(
-                "{CONFIG_FILE}을 찾지 못했습니다. 저장소를 등록하면 시작할 수 있습니다."
+                "{}을 찾지 못했습니다. 파일이 옮겨졌거나 지워졌을 수 있습니다.",
+                config_path.display()
             )),
             ..Default::default()
         };
-    };
+    }
+    let config_path = config_path.to_path_buf();
     let config = match Config::load(&config_path) {
         Ok(c) => c,
         Err(e) => {

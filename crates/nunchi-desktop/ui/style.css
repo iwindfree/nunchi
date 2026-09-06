@@ -94,7 +94,11 @@ body {
   font-size: 12px;
   color: var(--muted);
   border-top: 1px solid var(--line);
+  cursor: pointer;
+  border-radius: 6px;
 }
+
+.solution:hover { background: color-mix(in srgb, var(--fg) 6%, transparent); color: var(--fg); }
 
 /* ── 본문 ────────────────────────────────────────────── */
 main {
