@@ -404,6 +404,101 @@ fn detects_api_calls_in_every_supported_language() {
 언어를 추가할 때 `CallSyntax`에 항목을 넣는 것을 잊으면 이 테스트가
 실패합니다.
 
+### 메서드가 어디에 적혀 있는가
+
+경로만큼 중요한 것이 HTTP 메서드입니다. 그런데 **메서드를 어디에 적는지가
+라이브러리마다 다릅니다.**
+
+처음에는 호출된 메서드 이름이 곧 HTTP 메서드라고 보았습니다.
+`axios.post(...)`는 POST이고 `rest.getForObject(...)`는 GET입니다. 실제
+코드에서 흔한 스무 가지 형태로 재어 보니 열한 가지만 잡혔습니다.
+
+가장 나빴던 것이 이것입니다.
+
+```javascript
+fetch("/api/orders", { method: "POST" });
+```
+
+**프런트엔드에서 GET이 아닌 호출은 거의 전부 이 형태입니다.** 함수 이름은
+언제나 `fetch`이고 메서드는 두 번째 인자에 있습니다. 그것을 읽지 않으면
+전부 GET으로 기록됩니다.
+
+놓치는 것보다 나쁩니다. 놓치면 그 호출이 그래프에 없을 뿐이지만, 틀린
+메서드로 기록하면 **엉뚱한 라우트에 이어집니다.** `POST /api/orders`를
+불렀는데 `GET /api/orders`를 처리하는 핸들러로 연결됩니다.
+
+그래서 메서드를 어디서 읽을지도 규칙에 적습니다.
+
+| 필드 | 어떤 형태 |
+|---|---|
+| `method_option` | `fetch(url, { method: "POST" })` |
+| `url_option` | `axios({ method: "post", url: "/api/orders" })` |
+| `method_arg` | `rest.exchange(url, HttpMethod.POST, entity, X.class)` |
+| `method_from_receiver` | `webClient.get().uri("/api/orders")` |
+
+읽는 절차는 정확한 자리부터 봅니다. 코드에 적힌 메서드가 규칙의 기본값을
+이깁니다.
+
+```rust
+fn method_of(...) -> Option<String> {
+    // 1. 설정 객체에 적혀 있으면 그것이 가장 정확하다. `fetch(url, {method})`
+    if let Some(key) = &rule.method_option {
+        if let Some(node) = option_value(args, key, src, syntax) {
+            if let Some(method) = http_method_of(node, src, syntax) {
+                return Some(method);
+            }
+        }
+    }
+    // 2. 인자로 넘기는 형태. `rest.exchange(url, HttpMethod.POST, ...)`
+    //
+    // 이 자리를 읽지 못하면 메서드를 알 수 없다. 아래로 흘려보내면 호출된
+    // 메서드 이름인 `EXCHANGE`가 HTTP 메서드로 들어가므로 그 호출을 버린다.
+    if let Some(index) = rule.method_arg {
+        return argument_at(args, index, syntax).and_then(|n| http_method_of(n, src, syntax));
+    }
+    // 3. 체이닝. `webClient.get().uri(...)`
+    if !rule.method_from_receiver.is_empty() {
+        return receiver_call_method(receiver?, src, syntax).map(|m| m.to_ascii_uppercase());
+    }
+    // 4. 규칙에 고정된 값
+    if let Some(method) = &rule.method {
+        return Some(method.clone());
+    }
+    // 5. 호출된 메서드 이름이 곧 HTTP 메서드다.
+    Some(callee.to_ascii_lowercase().trim_end_matches("async").to_ascii_uppercase())
+}
+```
+
+**모르면 버립니다.** 2번에서 `rest.exchange(url, verb, ...)`처럼 메서드가
+변수면 값을 알 수 없습니다. 여기서 아래로 흘려보내면 5번이 호출된 메서드
+이름을 써서 `EXCHANGE`라는 HTTP 메서드가 그래프에 들어갑니다.
+
+읽어 낸 값도 검사합니다.
+
+```rust
+let method = raw.trim().to_ascii_uppercase();
+const KNOWN: [&str; 7] = ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"];
+KNOWN.contains(&method.as_str()).then_some(method)
+```
+
+대문자만 씌워 통과시키면 `HttpMethod.valueOf(x)` 같은 것이 `VALUEOF(X)`가
+되어 들어갑니다.
+
+C#은 동사마다 규칙을 나누었습니다. 이름에서 `Async`만 벗기는 방식으로는
+`PostAsJsonAsync`가 `POSTASJSON`이 됩니다. 확장 메서드가 흔한 언어라 이름을
+그대로 적어 두는 편이 안전합니다.
+
+이 스무 가지 표는 테스트로 남아 있습니다.
+
+```rust
+#[test]
+fn detects_the_shapes_real_code_uses() {
+```
+
+형태 하나를 놓치면 그 프로젝트의 호출이 통째로 빠지는데, **오류가 나지 않고
+결과만 조용히 빕니다.** 표로 두면 새 형태를 더할 때 한 줄만 쓰면 되고,
+잡으면 안 되는 것들도 같은 표에서 함께 확인합니다.
+
 ### 정적으로 알 수 없는 경로
 
 ```rust

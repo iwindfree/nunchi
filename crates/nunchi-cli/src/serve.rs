@@ -22,17 +22,47 @@ pub struct NunchiServer {
     config: Config,
     db_path: PathBuf,
     roots: HashMap<String, PathBuf>,
+    freshness: nunchi_core::freshness::Freshness,
 }
+
+/// 인덱스가 낡았는지 다시 재는 간격.
+///
+/// 도구를 부를 때마다 저장소를 훑으면 큰 저장소에서 질의보다 검사가 비싸진다.
+/// 그렇다고 처음 한 번만 재면 긴 세션 도중에 `git pull`을 한 경우를 놓친다.
+const FRESHNESS_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
 
 impl NunchiServer {
     pub fn new(config: Config, db_path: PathBuf) -> Self {
         let roots = pack::repo_roots(&config);
-        NunchiServer { config, db_path, roots }
+        NunchiServer {
+            config,
+            db_path,
+            roots,
+            freshness: nunchi_core::freshness::Freshness::new(FRESHNESS_INTERVAL),
+        }
     }
 
     fn store(&self) -> Result<SqliteStore, McpError> {
         SqliteStore::open(&self.db_path)
             .map_err(|e| McpError::internal_error(format!("인덱스를 열 수 없습니다: {e}"), None))
+    }
+
+    /// 답에 인덱스 상태 경고를 붙인다.
+    ///
+    /// **에이전트는 자기가 받지 못한 것을 알 수 없다.** 인덱스가 낡으면 팩은
+    /// 낡은 항목을 조용히 버리고 새 파일은 아예 나오지 않는데, 받는 쪽에서는
+    /// 그냥 결과가 적을 뿐이다. 그 사실이 답과 함께 가야 한다.
+    fn answer(&self, store: &SqliteStore, mut value: serde_json::Value) -> CallToolResponse {
+        if let Some(warning) = self
+            .freshness
+            .get(&self.config, store)
+            .and_then(|d| d.summary())
+        {
+            if let Some(obj) = value.as_object_mut() {
+                obj.insert("stale_index".into(), serde_json::Value::String(warning));
+            }
+        }
+        ok_json(value)
     }
 }
 
@@ -79,7 +109,9 @@ impl ServerHandler for NunchiServer {
         info.instructions = Some(
                 "코드베이스 컨텍스트 그래프. 파일을 대량으로 읽기 전에 nunchi_pack을 먼저 \
                  호출하세요. 반환값은 답이 아니라 좌표(path:line)이므로, 필요한 범위만 \
-                 Read하면 됩니다."
+                 Read하면 됩니다. 응답에 stale_index 가 있으면 인덱스가 실제 코드와 \
+                 어긋난 것입니다. 결과에 빠진 것이 있을 수 있으니 그 사실을 사용자에게 \
+                 알리고 `nunchi index` 실행을 권하세요."
                 .into(),
         );
         info
@@ -163,7 +195,7 @@ impl ServerHandler for NunchiServer {
                 };
                 let result =
                     pack::build_pack(&store, &graph, &task, &self.roots, &opts).map_err(err)?;
-                Ok(ok_json(serde_json::to_value(result).unwrap_or_default()))
+                Ok(self.answer(&store, serde_json::to_value(result).unwrap_or_default()))
             }
             "nunchi_find" => {
                 let query = arg_str(&request, "query")?;
@@ -185,7 +217,7 @@ impl ServerHandler for NunchiServer {
                         })
                     })
                     .collect();
-                Ok(ok_json(serde_json::json!({ "items": items })))
+                Ok(self.answer(&store, serde_json::json!({ "items": items })))
             }
             "nunchi_neighbors" => {
                 let id = NodeId(arg_str(&request, "id")?);
@@ -204,7 +236,7 @@ impl ServerHandler for NunchiServer {
                 let nodes = store
                     .neighbors(&id, &kinds, Direction::Both, depth)
                     .map_err(err)?;
-                Ok(ok_json(serde_json::json!({
+                Ok(self.answer(&store, serde_json::json!({
                     "items": nodes.iter().map(|n| serde_json::json!({
                         "id": n.id.0, "ref": n.reference(), "sym": n.name,
                         "kind": n.kind.as_str(), "repo": n.repo, "sig": n.signature,
@@ -230,7 +262,7 @@ impl ServerHandler for NunchiServer {
                         "kind": n.kind.as_str(), "repo": n.repo,
                     })
                 };
-                Ok(ok_json(serde_json::json!({
+                Ok(self.answer(&store, serde_json::json!({
                     "callers": callers.iter().take(40).map(brief).collect::<Vec<_>>(),
                     "cross_repo": cross.iter().take(20).map(brief).collect::<Vec<_>>(),
                 })))
@@ -241,11 +273,14 @@ impl ServerHandler for NunchiServer {
                     .map_err(err)?
                     .and_then(|m| serde_json::from_str(&m).ok())
                     .unwrap_or(serde_json::Value::Null);
-                Ok(ok_json(serde_json::json!({
+                // doctor 는 상태를 묻는 도구다. 한 줄 경고가 아니라 잰 값을 그대로 준다.
+                let drift = self.freshness.get(&self.config, &store);
+                Ok(self.answer(&store, serde_json::json!({
                     "solution": self.config.solution.name,
                     "nodes": store.count_nodes().map_err(err)?,
                     "edges": store.count_edges().map_err(err)?,
                     "metrics": metrics,
+                    "drift": drift,
                 })))
             }
             other => Err(McpError::invalid_params(
@@ -259,6 +294,22 @@ impl ServerHandler for NunchiServer {
 /// stdio로 MCP 서버를 띄운다.
 pub fn run(config: Config, db_path: PathBuf) -> Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+    // 띄우자마자 한 번 재서 알린다. 워처가 꺼져 있는 동안 `git pull` 을 했다면
+    // 첫 질의부터 낡은 답이 나가는데, 그 사실을 사람이 먼저 알아야 한다.
+    //
+    // 표준 출력은 JSON-RPC 전용이므로 여기에는 한 글자도 쓰면 안 된다.
+    if let Ok(store) = SqliteStore::open(&db_path) {
+        if let Ok(drift) = nunchi_core::freshness::measure(&config, &store) {
+            match drift.summary() {
+                Some(warning) => eprintln!("{warning}"),
+                None => eprintln!(
+                    "인덱스가 최신입니다. 파일 {}개, 확인에 {}ms",
+                    drift.indexed, drift.took_ms
+                ),
+            }
+        }
+    }
+
     runtime.block_on(async move {
         let service = NunchiServer::new(config, db_path)
             .serve(rmcp::transport::io::stdio())

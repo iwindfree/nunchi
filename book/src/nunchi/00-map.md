@@ -75,6 +75,7 @@ flowchart TD
 | `core/pack.rs` | 랭킹하고 예산에 맞춰 렌더링합니다 | [8장](08-pack.md) |
 | `core/semantic.rs` | 식별자를 분해하고 동의어를 적용합니다 | [8장](08-pack.md) |
 | `core/bench.rs` | 절감량을 측정합니다 | [8장](08-pack.md) |
+| `core/freshness.rs` | 인덱스가 실제 코드와 얼마나 어긋났는지 잽니다 | [10장](10-watch.md) |
 | `cli/watch.rs` | 파일 변경을 감시합니다 | [10장](10-watch.md) |
 | `cli/serve.rs` | MCP 서버를 실행합니다 | [11장](11-serve-tui.md) |
 | `cli/tui.rs` | 대화형 화면을 그립니다 | [11장](11-serve-tui.md) |

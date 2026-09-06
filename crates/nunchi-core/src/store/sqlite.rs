@@ -7,7 +7,7 @@ use super::{RankOpts, Ranked, SearchHit, Store};
 use crate::model::*;
 use crate::path::compare_key;
 use anyhow::{Context, Result};
-use rusqlite::{params, Connection, OptionalExtension, Row};
+use rusqlite::{Connection, OptionalExtension, Row, params};
 use std::collections::{HashSet, VecDeque};
 use std::path::Path;
 
@@ -78,6 +78,17 @@ pub struct SqliteStore {
     conn: Connection,
 }
 
+/// 인덱싱된 파일 하나의 신선도를 판단할 값들.
+#[derive(Debug, Clone)]
+pub struct IndexedFile {
+    pub repo: String,
+    pub path: String,
+    pub hash: Option<String>,
+    pub mtime: Option<i64>,
+    /// 인덱싱할 때의 파일 크기. 예전 인덱스에는 없다.
+    pub bytes: Option<u64>,
+}
+
 impl SqliteStore {
     pub fn open(path: &Path) -> Result<Self> {
         if let Some(parent) = path.parent() {
@@ -113,7 +124,9 @@ impl SqliteStore {
     }
 
     pub fn schema_version(&self) -> Result<Option<i64>> {
-        Ok(self.get_meta("schema_version")?.and_then(|v| v.parse().ok()))
+        Ok(self
+            .get_meta("schema_version")?
+            .and_then(|v| v.parse().ok()))
     }
 
     pub fn get_meta(&self, key: &str) -> Result<Option<String>> {
@@ -134,7 +147,13 @@ impl SqliteStore {
         Ok(())
     }
 
-    pub fn record_repo(&mut self, repo: &str, root: &str, branch: Option<&str>, head: Option<&str>) -> Result<()> {
+    pub fn record_repo(
+        &mut self,
+        repo: &str,
+        root: &str,
+        branch: Option<&str>,
+        head: Option<&str>,
+    ) -> Result<()> {
         self.conn.execute(
             "INSERT INTO repos (repo, root, branch, head) VALUES (?1, ?2, ?3, ?4)
              ON CONFLICT(repo) DO UPDATE SET root=excluded.root, branch=excluded.branch, head=excluded.head",
@@ -168,6 +187,31 @@ impl SqliteStore {
             .flatten())
     }
 
+    /// 인덱싱된 파일 전부와 그 해시·수정 시각.
+    ///
+    /// 신선도 검사가 쓴다. 노드를 통째로 읽으면 본문과 시그니처까지 딸려
+    /// 오는데, 여기서는 세 값이면 충분하다.
+    pub fn indexed_files(&self) -> Result<Vec<IndexedFile>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT repo, path, content_hash, mtime, attrs FROM nodes \
+             WHERE kind = 'file' AND path IS NOT NULL",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            let attrs: String = r.get(4)?;
+            Ok(IndexedFile {
+                repo: r.get(0)?,
+                path: r.get(1)?,
+                hash: r.get(2)?,
+                mtime: r.get(3)?,
+                // 예전에 만든 인덱스에는 없다. 없으면 크기 비교를 건너뛴다.
+                bytes: serde_json::from_str::<serde_json::Value>(&attrs)
+                    .ok()
+                    .and_then(|v| v["bytes"].as_u64()),
+            })
+        })?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
     /// 랭킹 루프용 — 전체 노드를 로드하지 않고 필요한 두 값만 읽는다.
     pub fn node_kind_and_mtime(&self, id: &NodeId) -> Result<Option<(NodeKind, Option<i64>)>> {
         let row: Option<(String, Option<i64>)> = self
@@ -182,11 +226,15 @@ impl SqliteStore {
     }
 
     pub fn count_nodes(&self) -> Result<i64> {
-        Ok(self.conn.query_row("SELECT COUNT(*) FROM nodes", [], |r| r.get(0))?)
+        Ok(self
+            .conn
+            .query_row("SELECT COUNT(*) FROM nodes", [], |r| r.get(0))?)
     }
 
     pub fn count_edges(&self) -> Result<i64> {
-        Ok(self.conn.query_row("SELECT COUNT(*) FROM edges", [], |r| r.get(0))?)
+        Ok(self
+            .conn
+            .query_row("SELECT COUNT(*) FROM edges", [], |r| r.get(0))?)
     }
 
     /// 언어별 파일 수 — `nunchi doctor` 커버리지 표의 원천 (docs/GUIDE.md 최초 적용).
@@ -398,7 +446,10 @@ fn row_to_node(row: &Row<'_>) -> rusqlite::Result<Node> {
         repo: row.get(3)?,
         path: row.get(4)?,
         span: match (start, end) {
-            (Some(s), Some(e)) => Some(Span { start_line: s, end_line: e }),
+            (Some(s), Some(e)) => Some(Span {
+                start_line: s,
+                end_line: e,
+            }),
             _ => None,
         },
         signature: row.get(7)?,
@@ -619,8 +670,18 @@ mod tests {
         let c = sample_file("api", "c.java", "java");
         store.upsert_nodes(&[a.clone(), b.clone(), c.clone()])?;
         store.upsert_edges(&[
-            Edge::new(a.id.clone(), b.id.clone(), EdgeKind::Calls, Provenance::Fast),
-            Edge::new(b.id.clone(), c.id.clone(), EdgeKind::Calls, Provenance::Fast),
+            Edge::new(
+                a.id.clone(),
+                b.id.clone(),
+                EdgeKind::Calls,
+                Provenance::Fast,
+            ),
+            Edge::new(
+                b.id.clone(),
+                c.id.clone(),
+                EdgeKind::Calls,
+                Provenance::Fast,
+            ),
         ])?;
 
         let one = store.neighbors(&a.id, &[EdgeKind::Calls], Direction::Out, 1)?;
@@ -666,14 +727,45 @@ mod tests {
         let mut store = SqliteStore::open_in_memory()?;
         let repo_node = Node::new(NodeId::repo("api"), NodeKind::Repo, "api", "api");
         let file = sample_file("api", "A.java", "java");
-        let dep = Node::new(NodeId("dep:spring".into()), NodeKind::ExternalDep, "spring", "api");
-        let commit = Node::new(NodeId("commit:api/abc".into()), NodeKind::Commit, "abc", "api");
+        let dep = Node::new(
+            NodeId("dep:spring".into()),
+            NodeKind::ExternalDep,
+            "spring",
+            "api",
+        );
+        let commit = Node::new(
+            NodeId("commit:api/abc".into()),
+            NodeKind::Commit,
+            "abc",
+            "api",
+        );
         let author = Node::new(NodeId("author:x@y".into()), NodeKind::Author, "x", "api");
-        store.upsert_nodes(&[repo_node.clone(), file.clone(), dep.clone(), commit.clone(), author.clone()])?;
+        store.upsert_nodes(&[
+            repo_node.clone(),
+            file.clone(),
+            dep.clone(),
+            commit.clone(),
+            author.clone(),
+        ])?;
         store.upsert_edges(&[
-            Edge::new(file.id.clone(), dep.id.clone(), EdgeKind::DependsOn, Provenance::Fast),
-            Edge::new(file.id.clone(), commit.id.clone(), EdgeKind::ModifiedBy, Provenance::Precise),
-            Edge::new(commit.id.clone(), author.id.clone(), EdgeKind::AuthoredBy, Provenance::Precise),
+            Edge::new(
+                file.id.clone(),
+                dep.id.clone(),
+                EdgeKind::DependsOn,
+                Provenance::Fast,
+            ),
+            Edge::new(
+                file.id.clone(),
+                commit.id.clone(),
+                EdgeKind::ModifiedBy,
+                Provenance::Precise,
+            ),
+            Edge::new(
+                commit.id.clone(),
+                author.id.clone(),
+                EdgeKind::AuthoredBy,
+                Provenance::Precise,
+            ),
         ])?;
         // 참조가 살아 있는 동안에는 아무것도 지우지 않는다.
         assert_eq!(store.prune_orphans()?, 0);
@@ -683,14 +775,22 @@ mod tests {
         assert_eq!(store.prune_orphans()?, 3, "연쇄 삭제가 되어야 한다");
 
         // 뿌리 노드는 들어오는 엣지가 없어도 살아남아야 한다.
-        assert!(store.get_node(&repo_node.id)?.is_some(), "Repo 노드를 지우면 안 된다");
+        assert!(
+            store.get_node(&repo_node.id)?.is_some(),
+            "Repo 노드를 지우면 안 된다"
+        );
         Ok(())
     }
 
     #[test]
     fn prune_spares_pathless_nodes() -> Result<()> {
         let mut store = SqliteStore::open_in_memory()?;
-        let commit = Node::new(NodeId("commit:api/abc".into()), NodeKind::Commit, "abc", "api");
+        let commit = Node::new(
+            NodeId("commit:api/abc".into()),
+            NodeKind::Commit,
+            "abc",
+            "api",
+        );
         let author = Node::new(NodeId("author:x@y".into()), NodeKind::Author, "x", "api");
         store.upsert_nodes(&[commit, author])?;
         // 경로가 없는 노드는 파일 목록과 무관하다.

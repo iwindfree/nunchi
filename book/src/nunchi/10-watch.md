@@ -197,6 +197,123 @@ fn reindex(config: &Config, db_path: &PathBuf, cache_path: &PathBuf) -> Result<i
 노트북에서 저장소 두 개를 재인덱싱하는 데 0.2초가 걸립니다. 더 큰 저장소에서 문제가 되면 그때
 넣으면 됩니다.
 
+### 워처가 꺼져 있는 동안에는
+
+여기까지가 워처의 이야기인데, **워처가 늘 도는 것은 아닙니다.** 터미널에서
+`git pull`을 하거나 다른 편집기로 고치거나, 앞선 에이전트 세션이 끝난 뒤에
+파일이 바뀌면 인덱스는 조용히 낡습니다.
+
+낡은 인덱스가 틀린 좌표를 주지는 않습니다. [8장](08-pack.md)에서 본
+`read_verified`가 파일을 다시 읽어 해시를 견주고, 어긋나면 그 항목을
+버립니다.
+
+문제는 **버렸다는 사실을 아무도 모른다**는 것입니다. 새로 생긴 파일은 아예
+나오지 않습니다. 에이전트는 자기가 무엇을 받지 못했는지 알 방법이 없고,
+사람은 결과가 좀 부실하다고만 느낍니다.
+
+그래서 재서 알립니다. `freshness.rs`가 하는 일입니다.
+
+```rust
+pub struct Drift {
+    /// 인덱싱한 뒤 내용이 바뀐 파일
+    pub changed: usize,
+    /// 인덱스에 없는 파일
+    pub added: usize,
+    /// 인덱스에는 있는데 사라진 파일
+    pub removed: usize,
+    pub indexed: usize,
+    pub examples: Vec<String>,
+    pub took_ms: u64,
+}
+```
+
+**고치지는 않습니다.** 다시 인덱싱할지는 사람이 정합니다. 질의 하나 때문에
+저장소 전체를 다시 훑기 시작하면 그것대로 곤란합니다.
+
+#### 값싸게 재는 법
+
+파일을 전부 읽어 해시하면 이 검사가 인덱싱만큼 비싸집니다. 그러면 호출할
+때마다 돌릴 수 없습니다.
+
+그래서 **읽지 않고 넘길 수 있는 것부터 거릅니다.**
+
+```rust
+fn unchanged(meta: &std::fs::Metadata, was: &IndexedFile) -> bool {
+    let Some(indexed_mtime) = was.mtime else {
+        return false;
+    };
+    let same_mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .is_some_and(|now| now == indexed_mtime);
+    // 크기는 예전 인덱스에 없다. 없으면 시각만 본다.
+    let same_size = was.bytes.is_none_or(|bytes| bytes == meta.len());
+    same_mtime && same_size
+}
+```
+
+수정 시각과 크기가 모두 같으면 읽지 않고 넘어갑니다. 다를 때만 실제로 읽어
+해시를 견줍니다.
+
+크기까지 보는 이유가 있습니다. 수정 시각이 **초 단위**라 같은 초 안에 두 번
+고치면 구별되지 않습니다. 길이가 달라졌다면 거기서 드러납니다.
+
+해시까지 견주는 이유도 있습니다. `git checkout`은 내용이 같은 파일도 다시
+써서 수정 시각을 바꿉니다. 시각만 보면 브랜치를 옮길 때마다 저장소 전체가
+바뀐 것으로 나옵니다.
+
+이 저장소에서 실측했습니다.
+
+```
+파일 327개 확인에 15밀리초
+```
+
+#### 거르는 규칙이 갈라지면
+
+신선도 검사는 "인덱스에 없는 파일"을 새 파일로 셉니다. 그런데 검사가
+인덱서와 **다르게 거르기 시작하면** 멀쩡한 파일이 새 파일로 잡힙니다.
+`node_modules` 안의 파일 수천 개가 갑자기 새 파일이 되는 식입니다.
+
+그래서 디렉터리를 쳐내는 워커를 두 곳이 함께 씁니다.
+
+```rust
+pub fn source_walker(root: &Path, excludes: &GlobSet) -> ignore::Walk
+```
+
+그리고 테스트가 그것을 지킵니다.
+
+```rust
+/// 인덱싱 직후에는 어긋난 것이 없어야 한다.
+#[test]
+fn a_fresh_index_reports_nothing() {
+    // ... 인덱싱 대상이 아닌 파일도 함께 만들어 둔다
+    let (config, store) = indexed(&dir);
+    let drift = measure(&config, &store).unwrap();
+    assert!(!drift.is_behind(), "갓 인덱싱했는데 어긋났다고 한다: {drift:?}");
+}
+```
+
+이 테스트가 지키는 것은 숫자가 아니라 **두 규칙이 갈라지지 않는 것**입니다.
+
+#### 누구에게 알리는가
+
+세 곳에서 씁니다.
+
+| 어디 | 언제 |
+|---|---|
+| MCP 서버 | 띄울 때 한 번, 그 뒤로는 60초에 한 번씩 다시 재어 답에 `stale_index`로 붙입니다 |
+| `nunchi doctor` | 부를 때마다 |
+| 데스크톱 앱 | 개요 화면을 열 때마다 |
+
+MCP 서버가 60초 간격인 이유가 있습니다. 도구를 부를 때마다 저장소를 훑으면
+큰 저장소에서 질의보다 검사가 비싸집니다. 그렇다고 띄울 때 한 번만 재면 긴
+세션 도중에 `git pull`을 한 경우를 놓칩니다.
+
+서버가 띄우면서 내는 알림은 **표준 오류로만** 나갑니다. 표준 출력은 JSON-RPC
+전용이라 한 글자라도 섞이면 프로토콜이 깨집니다.
+
 ### Windows에서 확인해야 할 것
 
 이 코드는 macOS에서만 실측했습니다. Windows의
@@ -213,5 +330,9 @@ fn reindex(config: &Config, db_path: &PathBuf, cache_path: &PathBuf) -> Result<i
 `.nunchi`와 `.git` 변경을 무시하지 않으면 무한 반복이 됩니다.
 
 재인덱싱은 전체를 다시 하지만 내용 해시 기반 캐시 덕분에 0.2초입니다.
+
+워처가 꺼져 있는 동안 코드가 바뀌면 인덱스가 조용히 낡습니다. 틀린 좌표를
+주지는 않지만 말없이 적게 주므로, 어긋난 정도를 재서 MCP 응답과 `doctor`와
+데스크톱 앱에 알립니다. 고치지는 않고 알리기만 합니다.
 
 다음 장에서 마지막으로 MCP 서버와 TUI를 봅니다.

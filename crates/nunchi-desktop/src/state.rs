@@ -13,6 +13,8 @@ use std::path::{Path, PathBuf};
 pub struct Overview {
     pub config: Option<ConfigInfo>,
     pub index: Option<IndexInfo>,
+    /// 인덱스가 실제 코드와 얼마나 어긋났는지. 인덱스가 없으면 잴 것도 없다.
+    pub drift: Option<nunchi_core::freshness::Drift>,
     /// 설정이나 인덱스를 읽지 못한 이유. 화면에 그대로 보여 준다.
     pub problem: Option<String>,
 }
@@ -96,9 +98,16 @@ pub fn overview(config_path: &Path) -> Overview {
 
     let db_path = index_path(&config_path);
     let index = read_index(&db_path);
+    // 인덱스는 낡는다. 터미널에서 `git pull` 을 하거나 다른 편집기로 고치면
+    // 앱은 그 사실을 모른 채 예전 좌표를 보여 준다. 열 때마다 재서 알린다.
+    let drift = index.as_ref().and_then(|_| {
+        let store = SqliteStore::open(&db_path).ok()?;
+        nunchi_core::freshness::measure(&config, &store).ok()
+    });
     Overview {
         config: Some(info),
         index,
+        drift,
         problem: None,
     }
 }
@@ -138,11 +147,7 @@ fn read_index(db_path: &PathBuf) -> Option<IndexInfo> {
 /// `nunchi doctor`도 같은 기준으로 거른다.
 fn only_code_languages(mut metrics: serde_json::Value) -> serde_json::Value {
     if let Some(list) = metrics.get_mut("by_lang").and_then(|v| v.as_array_mut()) {
-        list.retain(|e| {
-            e["lang"]
-                .as_str()
-                .is_some_and(nunchi_core::lang::is_code)
-        });
+        list.retain(|e| e["lang"].as_str().is_some_and(nunchi_core::lang::is_code));
     }
     metrics
 }

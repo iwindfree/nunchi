@@ -247,18 +247,40 @@ fn cmd_doctor(config_arg: Option<PathBuf>, json: bool) -> Result<()> {
         .and_then(|m| serde_json::from_str(&m).ok())
         .unwrap_or(serde_json::Value::Null);
 
+    // 인덱스가 실제 코드와 얼마나 어긋났는지도 함께 본다. 커버리지가 아무리
+    // 좋아도 인덱스가 낡았으면 그 수치는 지금의 코드에 대한 것이 아니다.
+    let drift = nunchi_core::freshness::measure(&config, &store).ok();
+
     if json {
         let report = serde_json::json!({
             "solution": config.solution.name,
             "nodes": nodes,
             "edges": edges,
             "metrics": metrics,
+            "drift": drift,
         });
         println!("{}", serde_json::to_string_pretty(&report)?);
         return Ok(());
     }
 
     println!("solution: {}\n", config.solution.name);
+
+    if let Some(drift) = &drift {
+        println!("인덱스 상태");
+        match drift.summary() {
+            Some(warning) => {
+                println!("  ⚠ {warning}");
+                for line in &drift.examples {
+                    println!("    {line}");
+                }
+            }
+            None => println!(
+                "  ✓ 실제 코드와 일치합니다. 파일 {}개, 확인에 {}ms",
+                drift.indexed, drift.took_ms
+            ),
+        }
+        println!();
+    }
 
     println!("언어 커버리지");
     if let Some(langs) = metrics.get("by_lang").and_then(|v| v.as_array()) {

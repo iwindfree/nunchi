@@ -41,6 +41,10 @@ function overviewView() {
     )
     .join("");
 
+  // 인덱스가 낡았으면 지표보다 먼저 보여 준다. 아래 숫자들이 지금의 코드에
+  // 대한 것이 아니라는 뜻이기 때문이다.
+  const drift = driftPanel();
+
   const index = data.index
     ? `<div class="panel">
          <h3>인덱스</h3>
@@ -74,7 +78,36 @@ function overviewView() {
       </div>
     </div>
 
+    ${drift}
     ${index}`;
+}
+
+/** 인덱스와 실제 코드의 차이. 어긋나지 않았으면 조용히 지나간다. */
+function driftPanel() {
+  const d = data.drift;
+  if (!d) return "";
+  const behind = d.changed + d.added + d.removed;
+  if (behind === 0) {
+    return `<div class="panel">
+      <h3>인덱스 상태</h3>
+      <p class="ok">실제 코드와 일치합니다. 파일 ${num(d.indexed)}개를 ${d.took_ms}밀리초에 확인했습니다.</p>
+    </div>`;
+  }
+  const counts = [
+    d.changed ? `바뀐 파일 ${num(d.changed)}개` : null,
+    d.added ? `새 파일 ${num(d.added)}개` : null,
+    d.removed ? `사라진 파일 ${num(d.removed)}개` : null,
+  ].filter(Boolean).join(", ");
+  return `<div class="panel">
+    <h3>인덱스 상태</h3>
+    <p class="bad">인덱스가 실제 코드와 어긋나 있습니다. ${esc(counts)}.</p>
+    <ul class="hits">${d.examples.map((e) => `<li class="hit"><code>${esc(e)}</code></li>`).join("")}</ul>
+    <div class="actions">
+      <button class="primary" id="go-index">인덱싱 화면으로</button>
+    </div>
+    <p class="note">아래 숫자들은 마지막으로 인덱싱한 시점의 코드에 대한 것입니다.
+      탐색과 팩도 바뀐 파일의 좌표를 내놓지 않습니다.</p>
+  </div>`;
 }
 
 /** 지표에서 눈에 띄는 값 몇 개를 골라 큰 숫자로 보여 준다. */
@@ -1145,6 +1178,7 @@ function show(name) {
   if (name === "pack") bindPack();
   if (name === "settings") bindSettings();
   document.getElementById("edit-repos")?.addEventListener("click", editRepos);
+  document.getElementById("go-index")?.addEventListener("click", () => enter("index"));
 
   if (focused) {
     const again = document.getElementById(focused);

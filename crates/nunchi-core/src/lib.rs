@@ -10,6 +10,7 @@ pub mod cache;
 pub mod config;
 pub mod extract;
 pub mod framework;
+pub mod freshness;
 pub mod graph;
 pub mod history;
 pub mod index;

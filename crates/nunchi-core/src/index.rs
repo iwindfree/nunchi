@@ -102,6 +102,38 @@ struct PendingFile {
     api_call_ids: Vec<ApiCallSite>,
 }
 
+/// 인덱싱 대상 후보를 훑는 워커.
+///
+/// filter_entry로 **디렉터리 자체를 쳐낸다.** 파일 단위로만 걸러내면
+/// node_modules/·target/·build/ 안까지 전부 걸어 들어간다.
+///
+/// 인덱서와 신선도 검사가 같은 함수를 쓴다. 거르는 규칙이 갈라지면 검사 쪽이
+/// 멀쩡한 파일을 새 파일로 잘못 세게 된다.
+// ANCHOR: prune_walk
+pub fn source_walker(root: &Path, excludes: &GlobSet) -> ignore::Walk {
+    let prune_root = root.to_path_buf();
+    let prune_set = excludes.clone();
+    ignore::WalkBuilder::new(root)
+        .hidden(true)
+        .git_ignore(true)
+        .git_global(false)
+        .filter_entry(move |entry| {
+            let Some(rel) = npath::relative_to(&prune_root, entry.path()) else {
+                return true;
+            };
+            if rel.is_empty() {
+                return true;
+            }
+            if entry.file_type().is_some_and(|t| t.is_dir()) {
+                !(prune_set.is_match(&rel) || prune_set.is_match(format!("{rel}/")))
+            } else {
+                !prune_set.is_match(&rel)
+            }
+        })
+        .build()
+}
+// ANCHOR_END: prune_walk
+
 pub fn index_all(config: &Config, store: &mut SqliteStore) -> Result<IndexStats> {
     index_all_with_cache(config, store, None)
 }
@@ -664,7 +696,9 @@ fn external_dep_name(lang: &str, spec: &str) -> String {
     }
 }
 
-fn repo_name(root: &Path) -> String {
+/// 저장소 폴더 이름이 곧 저장소 이름이다. 신선도 검사도 같은 이름을 써야
+/// 인덱스의 노드와 짝지을 수 있다.
+pub fn repo_name(root: &Path) -> String {
     root.file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "repo".to_string())
@@ -702,30 +736,7 @@ fn scan_repo(
     let repo_id = NodeId::repo(repo);
     nodes.push(Node::new(repo_id.clone(), NodeKind::Repo, repo, repo));
 
-    // filter_entry로 **디렉터리 자체를 쳐낸다.** 파일 단위로만 걸러내면
-    // node_modules/·target/·build/ 안까지 전부 걸어 들어간다.
-    // ANCHOR: prune_walk
-    let prune_root = root.to_path_buf();
-    let prune_set = excludes.clone();
-    let walker = ignore::WalkBuilder::new(root)
-        .hidden(true)
-        .git_ignore(true)
-        .git_global(false)
-        .filter_entry(move |entry| {
-            let Some(rel) = npath::relative_to(&prune_root, entry.path()) else {
-                return true;
-            };
-            if rel.is_empty() {
-                return true;
-            }
-            if entry.file_type().is_some_and(|t| t.is_dir()) {
-                !(prune_set.is_match(&rel) || prune_set.is_match(format!("{rel}/")))
-            } else {
-                !prune_set.is_match(&rel)
-            }
-        })
-        .build();
-    // ANCHOR_END: prune_walk
+    let walker = source_walker(root, excludes);
 
     for entry in walker {
         let Ok(entry) = entry else { continue };
@@ -765,6 +776,9 @@ fn scan_repo(
             .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
             .map(|d| d.as_secs() as i64);
         file_node.mtime = file_mtime;
+        // 신선도 검사가 쓴다. 수정 시각이 초 단위라 같은 초 안에 두 번 고치면
+        // 시각만으로는 구별되지 않는데, 길이가 달라지면 거기서 드러난다.
+        file_node.attrs = serde_json::json!({ "bytes": meta.len() });
         nodes.push(file_node);
         edges.push(Edge::new(
             repo_id.clone(),
