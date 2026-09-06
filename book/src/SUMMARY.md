@@ -81,3 +81,4 @@
 - [9. 메모리 그래프와 페이지랭크](nunchi/09-graph.md)
 - [10. 파일 워처](nunchi/10-watch.md)
 - [11. MCP 서버와 TUI](nunchi/11-serve-tui.md)
+- [12. 데스크톱 앱](nunchi/12-desktop.md)

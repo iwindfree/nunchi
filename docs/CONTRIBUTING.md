@@ -23,6 +23,7 @@ RealWorld 저장소 실측: 평균 토큰 절감 53%, 재현율 100%
 | 컨텍스트 팩 | 랭킹, 토큰 예산, 상세도 강등을 모두 구현했습니다 |
 | MCP 서버 | rmcp 3.2를 사용하며 도구 5개를 노출합니다 |
 | TUI | 화면 5개를 제공합니다 |
+| 데스크톱 앱 | Tauri 2로 만들었으며 개요·인덱싱·탐색·팩·설정 화면을 제공합니다 |
 | 벤치 | `nunchi bench`로 측정합니다 |
 | SCIP 정밀 경로 | 착수하지 않았으며 남은 작업 중 가장 큽니다 |
 | Windows 실측 | 검증하지 못했고 업무 장비에서만 가능합니다 |
@@ -71,16 +72,23 @@ crates/
 │   │   ├── mod.rs               Store 트레이트이며 메서드가 6개입니다
 │   │   └── sqlite.rs            SQLite(WAL)와 FTS5 구현
 │   └── queries/*.scm            언어별 tree-sitter 쿼리
-└── nunchi-cli/                  단일 바이너리 `nunchi`
-    ├── main.rs                  서브커맨드
-    ├── serve.rs                 MCP 서버
-    ├── watch.rs                 파일 워처
-    └── tui.rs                   ratatui로 만든 화면 5개
+├── nunchi-cli/                  단일 바이너리 `nunchi`
+│   ├── main.rs                  서브커맨드
+│   ├── serve.rs                 MCP 서버
+│   ├── watch.rs                 파일 워처
+│   └── tui.rs                   ratatui로 만든 화면 5개
+└── nunchi-desktop/              Tauri 2 데스크톱 앱
+    ├── src/main.rs              웹뷰가 부르는 커맨드
+    ├── src/query.rs             탐색과 팩 조회
+    ├── src/settings.rs          설정을 폼과 원문으로 편집
+    ├── src/state.rs             개요 화면의 상태
+    ├── src/recent.rs            최근에 연 솔루션 목록
+    └── ui/                      프레임워크 없는 HTML·CSS·JS
 ```
 
-모든 로직은 `nunchi-core`에 있고 CLI는 진입점 역할만 합니다. MCP 서버와 CLI,
-TUI가 같은 코어를 직접 호출하므로 로직이 중복되지 않습니다. 그 결과 TUI에
-보이는 내용과 에이전트가 받는 내용이 동일합니다.
+모든 로직은 `nunchi-core`에 있고 나머지는 진입점 역할만 합니다. CLI와 MCP
+서버와 TUI와 데스크톱 앱이 같은 코어를 직접 호출하므로 로직이 중복되지
+않습니다. 그 결과 화면에 보이는 내용과 에이전트가 받는 내용이 동일합니다.
 
 ---
 
@@ -202,15 +210,17 @@ URL을 뽑아 정규화하는 **절차**는 `framework.rs`에 둡니다.
 
 ### 랭킹을 조정할 때
 
-가중치만 바꾸는 경우에는 `nunchi.shared.toml`이나 TUI에서 처리하시면 됩니다.
-새로운 점수 항을 추가하려면 세 곳을 고쳐야 합니다.
+가중치만 바꾸는 경우에는 `nunchi.shared.toml`이나 TUI, 데스크톱 앱의 팩
+화면에서 처리하시면 됩니다. 새로운 점수 항을 추가하려면 네 곳을 고쳐야
+합니다.
 
 1. `config.rs`의 `RankWeights`에 필드를 추가합니다.
 2. `pack.rs`의 `build_pack` 점수 계산에 항을 추가합니다.
 3. `tui.rs`의 `WEIGHT_LABELS`와 `adjust_weight`에 추가합니다.
+4. `nunchi-desktop/ui/main.js`의 `WEIGHTS`와 `DEFAULT_WEIGHTS`에 추가합니다.
 
-세 곳을 모두 고치지 않으면 TUI 슬라이더가 값만 바꾸고 랭킹에는 영향을 주지
-않는 상태가 됩니다. 실제로 그런 결함이 있었습니다.
+네 곳을 모두 고치지 않으면 슬라이더가 값만 바꾸고 랭킹에는 영향을 주지 않는
+상태가 됩니다. 실제로 그런 결함이 있었습니다.
 
 ### 저장 계층을 교체할 때
 
