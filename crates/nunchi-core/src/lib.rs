@@ -13,6 +13,7 @@ pub mod framework;
 pub mod graph;
 pub mod history;
 pub mod index;
+pub mod init;
 pub mod lang;
 pub mod mapper_xml;
 pub mod model;

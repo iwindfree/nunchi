@@ -6,7 +6,7 @@ mod watch;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use nunchi_core::config::{Config, IndexConfig, RankWeights, Solution, CONFIG_FILE};
+use nunchi_core::config::{CONFIG_FILE, Config};
 use nunchi_core::store::Store;
 use nunchi_core::{index, lang, SqliteStore};
 use std::path::{Path, PathBuf};
@@ -155,100 +155,31 @@ fn resolve(config_arg: Option<PathBuf>) -> Result<(Config, PathBuf)> {
 
 fn cmd_init(repos: Vec<PathBuf>, name: Option<String>, force: bool) -> Result<()> {
     let cwd = std::env::current_dir()?;
-    let target = cwd.join(CONFIG_FILE);
-    if target.exists() && !force {
-        anyhow::bail!("{CONFIG_FILE}이 이미 있습니다. 덮어쓰려면 --force를 쓰세요.");
-    }
-
     let repos = if repos.is_empty() { vec![cwd.clone()] } else { repos };
-    let mut resolved = Vec::new();
-    for r in &repos {
-        resolved.push(
-            r.canonicalize()
-                .with_context(|| format!("저장소 경로를 찾을 수 없습니다: {}", r.display()))?,
-        );
-    }
+    let out = nunchi_core::init::init_solution(&cwd, &repos, name, force)?;
 
-    let detected = detect_languages(&resolved)?;
-    let solution_name = name.unwrap_or_else(|| {
-        resolved[0]
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "solution".into())
-    });
-
-    let config = Config {
-        solution: Solution { name: solution_name.clone(), repos: resolved.clone() },
-        index: IndexConfig {
-            languages: if detected.is_empty() {
-                IndexConfig::default().languages
-            } else {
-                detected.clone()
-            },
-            ..IndexConfig::default()
-        },
-        rank: RankWeights::default(),
-        // 비워두면 내장 규칙(Spring + React)이 적용된다.
-        // `nunchi rules`로 현재 규칙을 확인하고 nunchi.toml에 추가해 확장한다.
-        framework: Default::default(),
-        semantic: Default::default(),
-    };
-    config.save(&target)?;
-
-    println!("{} 생성", target.display());
-    println!("  솔루션  {solution_name}");
-    println!("  저장소  {}개", resolved.len());
-    for r in &resolved {
+    println!("{} 생성", out.config_path.display());
+    println!("  솔루션  {}", out.solution);
+    println!("  저장소  {}개", out.repos.len());
+    for r in &out.repos {
         println!("          {}", r.display());
     }
-    println!("  언어    {}", if detected.is_empty() { "(감지 실패 — 기본값)".into() } else { detected.join(", ") });
-    // 공용 설정도 함께 만들어 둔다 — 커밋 대상이다.
-    let shared = config.save_shared(&cwd)?;
-    println!("{} 생성 (커밋하세요 — 경로가 없어 머신 간 공유됩니다)", shared.display());
+    println!(
+        "  언어    {}",
+        if out.used_default_languages {
+            "(감지 실패 — 기본값)".to_string()
+        } else {
+            out.languages.join(", ")
+        }
+    );
+    println!(
+        "{} 생성 (커밋하세요 — 경로가 없어 머신 간 공유됩니다)",
+        out.shared_path.display()
+    );
     println!("\n제외 패턴을 확인하세요. 생성 코드가 인덱스에 들어오면 랭킹이 오염됩니다.");
     println!("프레임워크 규칙은 내장 기본값(Spring + React)이 적용됩니다 — `nunchi rules`로 확인.");
     println!("다음: nunchi index");
     Ok(())
-}
-
-/// 저장소를 훑어 실제로 존재하는 코드 언어를 찾는다.
-fn detect_languages(repos: &[PathBuf]) -> Result<Vec<String>> {
-    use std::collections::BTreeMap;
-    let excludes = index::build_exclude_set(
-        &nunchi_core::config::DEFAULT_EXCLUDES
-            .iter()
-            .map(|s| s.to_string())
-            .collect::<Vec<_>>(),
-    )?;
-    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
-
-    for root in repos {
-        for entry in ignore::WalkBuilder::new(root).hidden(true).build().flatten() {
-            if !entry.file_type().is_some_and(|t| t.is_file()) {
-                continue;
-            }
-            let Some(rel) = nunchi_core::path::relative_to(root, entry.path()) else {
-                continue;
-            };
-            if excludes.is_match(&rel) {
-                continue;
-            }
-            if let Some(l) = lang::detect(entry.path()) {
-                if lang::is_code(l) {
-                    *counts.entry(l).or_default() += 1;
-                }
-            }
-        }
-    }
-
-    let mut langs: Vec<_> = counts.into_iter().collect();
-    langs.sort_by(|a, b| b.1.cmp(&a.1));
-    // 파일이 극소수인 언어는 노이즈일 가능성이 크다.
-    Ok(langs
-        .into_iter()
-        .filter(|(_, n)| *n >= 3)
-        .map(|(l, _)| l.to_string())
-        .collect())
 }
 
 fn cmd_index(config_arg: Option<PathBuf>, rebuild: bool, watch: bool) -> Result<()> {
