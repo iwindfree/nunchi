@@ -12,3 +12,6 @@ nunchi.toml
 # mdBook 산출물
 /book/book
 /book/exercises/target
+
+# Tauri 빌드 산출물
+crates/nunchi-desktop/gen/

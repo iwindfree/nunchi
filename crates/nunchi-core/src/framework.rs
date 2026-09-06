@@ -960,7 +960,7 @@ fn literal_parts(raw: &str) -> Vec<UrlPart> {
     let mut parts = Vec::new();
     let mut literal = String::new();
     let mut chars = raw.chars().peekable();
-    let mut push_unknown = |literal: &mut String, parts: &mut Vec<UrlPart>| {
+    let push_unknown = |literal: &mut String, parts: &mut Vec<UrlPart>| {
         if !literal.is_empty() {
             parts.push(UrlPart::Literal(std::mem::take(literal)));
         }
