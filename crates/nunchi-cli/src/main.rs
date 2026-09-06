@@ -489,8 +489,22 @@ fn cmd_rules(config_arg: Option<PathBuf>, as_toml: bool) -> Result<()> {
             (None, false) => format!("_.{}(…)", r.receiver_methods.join("|")),
             _ => "?".into(),
         };
-        let m = r.method.clone().unwrap_or_else(|| "(메서드명에서)".into());
-        println!("  {:<8} {:<44} → {m}  url=인자{}", r.lang, what, r.url_arg);
+        // 메서드를 어디서 읽는지 그대로 보여 준다. 규칙을 추가하는 사람이
+        // 어떤 형태를 흉내 내면 되는지 알아야 하기 때문이다.
+        let m = match (&r.method_arg, r.method_from_receiver.is_empty(), &r.method) {
+            (Some(i), _, _) => format!("인자{i}에서"),
+            (None, false, _) => "앞 호출에서".into(),
+            (None, true, Some(fixed)) => match &r.method_option {
+                Some(key) => format!("{fixed} 또는 설정의 {key}"),
+                None => fixed.clone(),
+            },
+            (None, true, None) => "메서드명에서".into(),
+        };
+        let url = match &r.url_option {
+            Some(key) => format!("설정의 {key} 또는 인자{}", r.url_arg),
+            None => format!("인자{}", r.url_arg),
+        };
+        println!("  {:<8} {:<44} → {m}  url={url}", r.lang, what);
     }
     println!("\n확장하려면 nunchi.toml에 추가하세요. 재빌드가 필요 없습니다:");
     println!(r#"

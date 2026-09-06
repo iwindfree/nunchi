@@ -116,3 +116,15 @@ table_annotations = []
 sql_annotations = []
 table_attribute = "__tablename__"
 repository_supertypes = []
+
+# `requests.request("POST", url)` — 메서드를 값으로 넘기는 형태.
+# 메서드가 첫 인자, URL 이 두 번째다.
+[[http_client]]
+lang = "python"
+receiver_methods = ["request"]
+method_arg = 0
+url_arg = 1
+exclude_receivers = [
+    "app",
+    "router",
+]

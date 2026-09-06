@@ -63,14 +63,58 @@ exclude_receivers = [
 ]
 
 # C# HttpClient
+# 동사마다 규칙을 나눈 이유가 있다. 메서드 이름에서 `Async` 만 벗기는
+# 방식으로는 `PostAsJsonAsync` 가 `POSTASJSON` 이 된다. 확장 메서드가
+# 흔하므로 이름을 그대로 적어 두는 편이 안전하다.
 [[http_client]]
 lang = "csharp"
 receiver_methods = [
     "GetAsync",
-    "PostAsync",
-    "PutAsync",
-    "DeleteAsync",
-    "PatchAsync",
+    "GetStringAsync",
+    "GetByteArrayAsync",
+    "GetStreamAsync",
+    "GetFromJsonAsync",
 ]
+method = "GET"
+url_arg = 0
+exclude_receivers = []
+
+[[http_client]]
+lang = "csharp"
+receiver_methods = [
+    "PostAsync",
+    "PostAsJsonAsync",
+]
+method = "POST"
+url_arg = 0
+exclude_receivers = []
+
+[[http_client]]
+lang = "csharp"
+receiver_methods = [
+    "PutAsync",
+    "PutAsJsonAsync",
+]
+method = "PUT"
+url_arg = 0
+exclude_receivers = []
+
+[[http_client]]
+lang = "csharp"
+receiver_methods = [
+    "DeleteAsync",
+    "DeleteFromJsonAsync",
+]
+method = "DELETE"
+url_arg = 0
+exclude_receivers = []
+
+[[http_client]]
+lang = "csharp"
+receiver_methods = [
+    "PatchAsync",
+    "PatchAsJsonAsync",
+]
+method = "PATCH"
 url_arg = 0
 exclude_receivers = []

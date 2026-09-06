@@ -91,6 +91,18 @@ pub struct LangSyntax {
     /// Java의 `method_invocation`은 `function` 필드 없이 둘을 직접 갖는다.
     #[serde(default)]
     pub member_is_call: bool,
+    /// 객체 리터럴 노드 이름. `fetch(url, { method: "POST" })`의 중괄호 부분이다.
+    #[serde(default)]
+    pub object: Vec<String>,
+    /// 객체 리터럴 안의 항목 노드 이름
+    #[serde(default)]
+    pub object_entry: Vec<String>,
+    /// 항목에서 키를 가리키는 필드
+    #[serde(default)]
+    pub object_key_field: String,
+    /// 항목에서 값을 가리키는 필드
+    #[serde(default)]
+    pub object_value_field: String,
 }
 
 /// 메서드 선언에 붙은 어노테이션이 HTTP 라우트를 정의한다.
@@ -167,6 +179,30 @@ pub struct HttpClientRule {
     /// 라우트 **정의**이지 호출이 아니다. 실측에서 이 오탐이 21건 중 16건이었다.
     #[serde(default)]
     pub exclude_receivers: Vec<String>,
+    /// 설정 객체에서 HTTP 메서드를 읽을 때 그 키 이름.
+    ///
+    /// `fetch("/api/orders", { method: "POST" })`가 이 형태다. 프런트엔드에서
+    /// GET 이 아닌 호출은 거의 전부 이렇게 쓰는데, 이것을 읽지 않으면 모두
+    /// GET 으로 기록되어 라우트를 엉뚱한 곳에 잇는다.
+    #[serde(default)]
+    pub method_option: Option<String>,
+    /// 설정 객체에서 URL을 읽을 때 그 키 이름.
+    /// `axios({ method: "post", url: "/api/orders" })`가 이 형태다.
+    #[serde(default)]
+    pub url_option: Option<String>,
+    /// HTTP 메서드가 인자로 오면 그 위치 (0-based).
+    ///
+    /// `requests.request("POST", url)`과 Spring 의
+    /// `rest.exchange(url, HttpMethod.POST, ...)`가 이 형태다. 값을 읽지
+    /// 못하면 메서드를 알 수 없으므로 그 호출은 버린다.
+    #[serde(default)]
+    pub method_arg: Option<usize>,
+    /// 수신자가 호출식일 때 그 메서드 이름을 HTTP 메서드로 쓴다.
+    ///
+    /// `webClient.get().uri("/api/orders")`처럼 체이닝으로 부르는 형태다.
+    /// 여기 적힌 이름으로 부른 경우에만 인정한다.
+    #[serde(default)]
+    pub method_from_receiver: Vec<String>,
 }
 
 /// 영속 계층 판별. JPA · MyBatis · SQLAlchemy가 모두 이 틀에 들어간다.
@@ -211,14 +247,26 @@ pub fn builtin() -> FrameworkRules {
     /// 언어를 추가할 때 여기에 한 줄을 더한다. 빠뜨리면 그 언어의 규칙이
     /// 통째로 사라지므로 `builtin_covers_every_supported_language`가 잡는다.
     const FILES: &[(&str, &str)] = &[
-        ("builtin.syntax.toml", include_str!("../rules/builtin.syntax.toml")),
-        ("builtin.java.toml", include_str!("../rules/builtin.java.toml")),
-        ("builtin.python.toml", include_str!("../rules/builtin.python.toml")),
+        (
+            "builtin.syntax.toml",
+            include_str!("../rules/builtin.syntax.toml"),
+        ),
+        (
+            "builtin.java.toml",
+            include_str!("../rules/builtin.java.toml"),
+        ),
+        (
+            "builtin.python.toml",
+            include_str!("../rules/builtin.python.toml"),
+        ),
         (
             "builtin.typescript.toml",
             include_str!("../rules/builtin.typescript.toml"),
         ),
-        ("builtin.csharp.toml", include_str!("../rules/builtin.csharp.toml")),
+        (
+            "builtin.csharp.toml",
+            include_str!("../rules/builtin.csharp.toml"),
+        ),
     ];
 
     let mut merged = FrameworkRules::default();
@@ -268,12 +316,7 @@ impl FrameworkRules {
     }
 
     /// 수신자가 붙는 데코레이터(`app.get`)용. 수신자 허용 목록까지 확인한다.
-    pub fn route_for_receiver(
-        &self,
-        lang: &str,
-        receiver: &str,
-        name: &str,
-    ) -> Option<&RouteRule> {
+    pub fn route_for_receiver(&self, lang: &str, receiver: &str, name: &str) -> Option<&RouteRule> {
         self.route.iter().find(|r| {
             Self::lang_matches(&r.lang, lang)
                 && r.annotation == name
@@ -338,7 +381,10 @@ mod tests {
             );
         }
         // 각 언어 파일이 실제로 읽혔는지 대표 규칙 하나씩으로 확인한다.
-        assert!(r.route_for("java", "GetMapping").is_some(), "builtin.java.toml");
+        assert!(
+            r.route_for("java", "GetMapping").is_some(),
+            "builtin.java.toml"
+        );
         assert!(
             r.route_for_receiver("python", "app", "get").is_some(),
             "builtin.python.toml"
@@ -347,7 +393,10 @@ mod tests {
             !r.http_clients("typescript").is_empty(),
             "builtin.typescript.toml"
         );
-        assert!(r.route_for("csharp", "HttpGet").is_some(), "builtin.csharp.toml");
+        assert!(
+            r.route_for("csharp", "HttpGet").is_some(),
+            "builtin.csharp.toml"
+        );
     }
 
     #[test]
@@ -426,8 +475,15 @@ mod tests {
         assert!(!java.is_empty());
         let rule = java[0];
         assert!(rule.entity_annotations.iter().any(|a| a == "Entity"), "JPA");
-        assert!(rule.sql_annotations.iter().any(|a| a == "Select"), "MyBatis");
-        assert!(rule.repository_supertypes.iter().any(|a| a == "JpaRepository"));
+        assert!(
+            rule.sql_annotations.iter().any(|a| a == "Select"),
+            "MyBatis"
+        );
+        assert!(
+            rule.repository_supertypes
+                .iter()
+                .any(|a| a == "JpaRepository")
+        );
         // SQLAlchemy
         assert_eq!(
             r.persistence_rules("python")[0].table_attribute.as_deref(),
@@ -454,11 +510,15 @@ method = "GET"
 
         let r = FrameworkRules::effective(&user);
         // 사내 관용구가 추가되고
-        assert_eq!(r.route_for("java", "MyInternalEndpoint").unwrap().method, "POST");
-        assert!(r
-            .http_clients("typescript")
-            .iter()
-            .any(|c| c.receiver_methods.iter().any(|m| m == "fetchJson")));
+        assert_eq!(
+            r.route_for("java", "MyInternalEndpoint").unwrap().method,
+            "POST"
+        );
+        assert!(
+            r.http_clients("typescript")
+                .iter()
+                .any(|c| c.receiver_methods.iter().any(|m| m == "fetchJson"))
+        );
         // 기본값도 그대로 남는다
         assert!(r.route_for("java", "GetMapping").is_some());
     }

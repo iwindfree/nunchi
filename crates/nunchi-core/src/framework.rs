@@ -213,7 +213,9 @@ pub fn has_dynamic_segment(raw: &str) -> bool {
         if start == 0 || bytes[start - 1] != b'/' {
             return true;
         }
-        let Some(end_rel) = trimmed[start..].find('}') else { return true };
+        let Some(end_rel) = trimmed[start..].find('}') else {
+            return true;
+        };
         let end = start + end_rel + 1;
         // 치환 뒤가 `/` 또는 끝이 아니면 세그먼트 중간이다.
         if end < bytes.len() && bytes[end] != b'/' {
@@ -261,7 +263,11 @@ pub fn normalize_route_path(raw: &str) -> String {
     }
 
     // 선행 슬래시 보장 + 후행 슬래시 제거 (`/api/orders/` ≡ `/api/orders`)
-    let mut path = if out.starts_with('/') { out } else { format!("/{out}") };
+    let mut path = if out.starts_with('/') {
+        out
+    } else {
+        format!("/{out}")
+    };
     while path.len() > 1 && path.ends_with('/') {
         path.pop();
     }
@@ -329,7 +335,9 @@ fn annotations_of<'a>(decl: Node<'a>, src: &'a [u8]) -> Vec<(String, Option<Stri
                     }
                 }
                 "annotation" => {
-                    let name = m.child_by_field_name("name").map(|n| text(n, src).to_string());
+                    let name = m
+                        .child_by_field_name("name")
+                        .map(|n| text(n, src).to_string());
                     let args = m
                         .child_by_field_name("arguments")
                         .map(|a| text(a, src).to_string());
@@ -366,7 +374,10 @@ fn first_string_literal(s: &str) -> Option<String> {
 fn method_from_args(args: &str, prefix: &str) -> Option<String> {
     let idx = args.find(prefix)?;
     let rest = &args[idx + prefix.len()..];
-    let verb: String = rest.chars().take_while(|c| c.is_ascii_alphabetic()).collect();
+    let verb: String = rest
+        .chars()
+        .take_while(|c| c.is_ascii_alphabetic())
+        .collect();
     (!verb.is_empty()).then_some(verb)
 }
 
@@ -392,7 +403,9 @@ pub fn extract_annotated(
 /// `@app.get("/orders")` 를 `(수신자, 이름, 인자원문)` 으로 분해한다.
 fn python_decorators<'a>(node: Node<'a>, src: &'a [u8]) -> Vec<(String, String, String)> {
     let mut out = Vec::new();
-    let Some(parent) = node.parent() else { return out };
+    let Some(parent) = node.parent() else {
+        return out;
+    };
     if parent.kind() != "decorated_definition" {
         return out;
     }
@@ -429,7 +442,9 @@ fn walk_python(
             .map(|n| text(n, src).to_string())
             .unwrap_or_default();
         for (receiver, name, args) in python_decorators(node, src) {
-            let Some(rule) = rules.route_for_receiver(lang, &receiver, &name) else { continue };
+            let Some(rule) = rules.route_for_receiver(lang, &receiver, &name) else {
+                continue;
+            };
             // Flask: methods=["POST"]
             let method = rule
                 .method_from_args_list
@@ -455,7 +470,9 @@ fn walk_python(
             .map(|n| text(n, src).to_string())
             .unwrap_or_default();
         for rule in rules.persistence_rules(lang) {
-            let Some(attr) = rule.table_attribute.as_deref() else { continue };
+            let Some(attr) = rule.table_attribute.as_deref() else {
+                continue;
+            };
             let body = text(node, src);
             if let Some(pos) = body.find(attr) {
                 if let Some(table) = first_string_literal(&body[pos..]) {
@@ -525,7 +542,11 @@ fn walk_java(
             .and_then(path_from_args)
             .map(|p| normalize_route_path(&p))
             .unwrap_or_default();
-        let class_base = if class_base == "/" { String::new() } else { class_base };
+        let class_base = if class_base == "/" {
+            String::new()
+        } else {
+            class_base
+        };
 
         // 엔티티 — @Entity / @Table(name="orders")
         for rule in rules.persistence_rules(lang) {
@@ -593,7 +614,9 @@ fn walk_java(
             .map(|n| text(n, src).to_string())
             .unwrap_or_default();
         for (anno, args) in annotations_of(node, src) {
-            let Some(rule) = rules.route_for(lang, &anno) else { continue };
+            let Some(rule) = rules.route_for(lang, &anno) else {
+                continue;
+            };
             let args_text = args.unwrap_or_default();
             let method = rule
                 .method_from_args_prefix
@@ -604,7 +627,11 @@ fn walk_java(
             let suffix = normalize_route_path(&raw);
             let suffix = if suffix == "/" { String::new() } else { suffix };
             let full = format!("{base_path}{suffix}");
-            let full = if full.is_empty() { "/".to_string() } else { full };
+            let full = if full.is_empty() {
+                "/".to_string()
+            } else {
+                full
+            };
 
             facts.routes.push(RouteFact {
                 method,
@@ -631,7 +658,9 @@ fn collect_java_injections(
     owner: &str,
     facts: &mut FrameworkFacts,
 ) {
-    let Some(body) = class_node.child_by_field_name("body") else { return };
+    let Some(body) = class_node.child_by_field_name("body") else {
+        return;
+    };
     let inject_rules = rules.inject_rules(lang);
     if inject_rules.is_empty() {
         return;
@@ -641,7 +670,9 @@ fn collect_java_injections(
     for member in body.children(&mut cursor) {
         match member.kind() {
             "field_declaration" => {
-                let Some(ty) = member.child_by_field_name("type") else { continue };
+                let Some(ty) = member.child_by_field_name("type") else {
+                    continue;
+                };
                 let type_name = text(ty, src).to_string();
                 let annos = annotations_of(member, src);
                 let autowired = inject_rules.iter().any(|r| {
@@ -657,7 +688,11 @@ fn collect_java_injections(
                     facts.injects.push(InjectFact {
                         owner: owner.to_string(),
                         injected_type: type_name,
-                        how: if autowired { InjectKind::Autowired } else { InjectKind::FinalField },
+                        how: if autowired {
+                            InjectKind::Autowired
+                        } else {
+                            InjectKind::FinalField
+                        },
                     });
                 }
             }
@@ -665,7 +700,9 @@ fn collect_java_injections(
                 if !inject_rules.iter().any(|r| r.constructor_params) {
                     continue;
                 }
-                let Some(params) = member.child_by_field_name("parameters") else { continue };
+                let Some(params) = member.child_by_field_name("parameters") else {
+                    continue;
+                };
                 let mut pc = params.walk();
                 for p in params.children(&mut pc) {
                     if p.kind() != "formal_parameter" {
@@ -786,7 +823,14 @@ fn walk_calls(
 
 /// 호출 대상을 수신자와 메서드 이름으로 나눈다.
 /// `fetch(...)`처럼 수신자가 없으면 첫 값이 `None`이다.
-fn callee_of(call: Node, src: &[u8], syntax: &crate::rules::LangSyntax) -> Option<(Option<String>, String)> {
+///
+/// 수신자를 문자열이 아니라 노드로 돌려준다. `webClient.get().uri(...)`에서
+/// 수신자가 또 호출식이라, 그 안의 메서드 이름을 다시 읽어야 하기 때문이다.
+fn callee_of<'a>(
+    call: Node<'a>,
+    src: &[u8],
+    syntax: &crate::rules::LangSyntax,
+) -> Option<(Option<Node<'a>>, String)> {
     let member = if syntax.member_is_call {
         call
     } else {
@@ -797,10 +841,101 @@ fn callee_of(call: Node, src: &[u8], syntax: &crate::rules::LangSyntax) -> Optio
         func
     };
     let name = member.child_by_field_name(&syntax.method_field)?;
-    let receiver = member
-        .child_by_field_name(&syntax.receiver_field)
-        .map(|r| text(r, src).to_string());
+    let receiver = member.child_by_field_name(&syntax.receiver_field);
     Some((receiver, text(name, src).to_string()))
+}
+
+/// 수신자가 호출식이면 그 메서드 이름을 돌려준다.
+/// `webClient.get().uri(...)`의 `uri` 자리에서 `get`을 찾는 데 쓴다.
+fn receiver_call_method(
+    receiver: Node,
+    src: &[u8],
+    syntax: &crate::rules::LangSyntax,
+) -> Option<String> {
+    if !syntax.call.iter().any(|k| k == receiver.kind()) {
+        return None;
+    }
+    callee_of(receiver, src, syntax).map(|(_, name)| name)
+}
+
+/// HTTP 메서드로 읽을 수 있는 노드인가.
+///
+/// 문자열 리터럴(`"POST"`)과 한정된 이름(`HttpMethod.POST`)을 모두 받는다.
+/// 아는 메서드가 아니면 `None`이다. `HttpMethod.valueOf(x)`처럼 실행해 봐야
+/// 아는 형태를 대문자만 씌워 통과시키면 없는 메서드가 그래프에 들어간다.
+fn http_method_of(node: Node, src: &[u8], syntax: &crate::rules::LangSyntax) -> Option<String> {
+    let raw = if syntax.string.iter().any(|k| k == node.kind()) {
+        strip_string_affixes(text(node, src)).to_string()
+    } else {
+        text(node, src).rsplit('.').next()?.to_string()
+    };
+    let method = raw.trim().to_ascii_uppercase();
+    const KNOWN: [&str; 7] = ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"];
+    KNOWN.contains(&method.as_str()).then_some(method)
+}
+
+/// 인자 하나를 위치로 꺼낸다. 괄호와 쉼표는 세지 않는다.
+fn argument_at<'a>(
+    args: Node<'a>,
+    index: usize,
+    syntax: &crate::rules::LangSyntax,
+) -> Option<Node<'a>> {
+    let mut cursor = args.walk();
+    let mut position = 0usize;
+    for arg in args.children(&mut cursor) {
+        if matches!(arg.kind(), "(" | ")" | ",") {
+            continue;
+        }
+        if position == index {
+            return Some(unwrap_argument(arg, syntax));
+        }
+        position += 1;
+    }
+    None
+}
+
+/// 인자 중 객체 리터럴을 찾아 그 안에서 키에 묶인 값을 꺼낸다.
+///
+/// `fetch(url, { method: "POST" })`의 `method`를 읽는 자리다. 몇 번째 인자인지
+/// 정해 두지 않은 이유는 라이브러리마다 다르기 때문이다. axios 는 첫 인자가
+/// 설정 객체이고 fetch 는 두 번째다.
+fn option_value<'a>(
+    args: Node<'a>,
+    key: &str,
+    src: &[u8],
+    syntax: &crate::rules::LangSyntax,
+) -> Option<Node<'a>> {
+    if syntax.object.is_empty() {
+        return None;
+    }
+    let mut cursor = args.walk();
+    for arg in args.children(&mut cursor) {
+        let arg = unwrap_argument(arg, syntax);
+        if !syntax.object.iter().any(|k| k == arg.kind()) {
+            continue;
+        }
+        let mut entries = arg.walk();
+        for entry in arg.children(&mut entries) {
+            if !syntax.object_entry.iter().any(|k| k == entry.kind()) {
+                continue;
+            }
+            let Some(name) = entry.child_by_field_name(&syntax.object_key_field) else {
+                continue;
+            };
+            // 키는 따옴표가 붙기도 한다. `{ "method": "POST" }`
+            //
+            // 여기서 `strip_string_affixes`를 쓰면 안 된다. 그것은 문자열
+            // 리터럴에서 `f"..."`, `u"..."` 같은 언어 접두사를 벗기는 함수라,
+            // 따옴표 없는 `url` 을 넘기면 앞의 `u` 를 접두사로 보고 떼어 낸다.
+            if text(name, src).trim_matches(['"', '\'', '`']) != key {
+                continue;
+            }
+            if let Some(value) = entry.child_by_field_name(&syntax.object_value_field) {
+                return Some(value);
+            }
+        }
+    }
+    None
 }
 
 fn api_call_of(
@@ -813,36 +948,9 @@ fn api_call_of(
     let (receiver, callee) = callee_of(call, src, syntax)?;
 
     // 어떤 규칙에 걸리는지 찾는다. 사내 래퍼도 설정에 추가하면 그대로 잡힌다.
-    let (method, url_arg) = clients.iter().find_map(|rule| -> Option<(String, usize)> {
-        match receiver.as_deref() {
-            // `fetch("/api/x")`처럼 수신자 없이 부르는 형태
-            None => (rule.callee.as_deref() == Some(callee.as_str()))
-                .then(|| (rule.method.clone().unwrap_or_else(|| "GET".into()), rule.url_arg)),
-            Some(recv) => {
-                // `this.post(...)`, `app.get(...)`은 라우트 정의다.
-                if rule
-                    .exclude_receivers
-                    .iter()
-                    .any(|x| x.eq_ignore_ascii_case(recv))
-                {
-                    return None;
-                }
-                let verb = callee.to_ascii_lowercase();
-                rule.receiver_methods
-                    .iter()
-                    .any(|m| m.eq_ignore_ascii_case(&verb))
-                    .then(|| {
-                        // method 미지정이면 호출된 메서드 이름이 곧 HTTP 메서드다.
-                        // C# `GetAsync`처럼 접미가 붙는 관용구를 벗긴다.
-                        let m = rule
-                            .method
-                            .clone()
-                            .unwrap_or_else(|| verb.trim_end_matches("async").to_uppercase());
-                        (m, rule.url_arg)
-                    })
-            }
-        }
-    })?;
+    let rule = clients
+        .iter()
+        .find(|rule| rule_matches(rule, receiver, &callee, src, syntax))?;
 
     let args = call.child_by_field_name("arguments")?;
 
@@ -853,7 +961,9 @@ fn api_call_of(
         return None;
     }
 
-    let template = url_argument_at(args, src, url_arg, syntax, constants)?;
+    let method = method_of(rule, &callee, receiver, args, src, syntax)?;
+    let template = url_of(rule, args, src, syntax, constants)?;
+
     // 알 수 있는 것이 하나도 없으면 어떤 경로인지 정할 수 없다.
     if !template.is_meaningful() {
         return None;
@@ -877,6 +987,113 @@ fn api_call_of(
     })
 }
 
+/// 이 호출이 규칙이 말하는 형태인가.
+fn rule_matches(
+    rule: &crate::rules::HttpClientRule,
+    receiver: Option<Node>,
+    callee: &str,
+    src: &[u8],
+    syntax: &crate::rules::LangSyntax,
+) -> bool {
+    let Some(receiver) = receiver else {
+        // `fetch("/api/x")`처럼 수신자 없이 부르는 형태
+        return rule.callee.as_deref() == Some(callee);
+    };
+    if rule.callee.is_some() {
+        return false;
+    }
+    // `this.post(...)`, `app.get(...)`은 라우트 정의다.
+    let name = text(receiver, src);
+    if rule
+        .exclude_receivers
+        .iter()
+        .any(|x| x.eq_ignore_ascii_case(name))
+    {
+        return false;
+    }
+    if !rule
+        .receiver_methods
+        .iter()
+        .any(|m| m.eq_ignore_ascii_case(callee))
+    {
+        return false;
+    }
+    // 체이닝 규칙이면 수신자도 호출이어야 하고, 그 메서드가 목록에 있어야 한다.
+    // `webClient.get().uri(...)`는 잡고 `builder.uri(...)`는 넘긴다.
+    if !rule.method_from_receiver.is_empty() {
+        return receiver_call_method(receiver, src, syntax).is_some_and(|m| {
+            rule.method_from_receiver
+                .iter()
+                .any(|x| x.eq_ignore_ascii_case(&m))
+        });
+    }
+    true
+}
+
+/// 이 호출의 HTTP 메서드를 정한다.
+///
+/// 정확한 자리부터 본다. 코드에 적힌 메서드가 규칙에 적힌 기본값을 이긴다.
+fn method_of(
+    rule: &crate::rules::HttpClientRule,
+    callee: &str,
+    receiver: Option<Node>,
+    args: Node,
+    src: &[u8],
+    syntax: &crate::rules::LangSyntax,
+) -> Option<String> {
+    // 1. 설정 객체에 적혀 있으면 그것이 가장 정확하다. `fetch(url, {method})`
+    if let Some(key) = &rule.method_option {
+        if let Some(node) = option_value(args, key, src, syntax) {
+            if let Some(method) = http_method_of(node, src, syntax) {
+                return Some(method);
+            }
+        }
+    }
+    // 2. 인자로 넘기는 형태. `rest.exchange(url, HttpMethod.POST, ...)`
+    //
+    // 이 자리를 읽지 못하면 메서드를 알 수 없다. 아래로 흘려보내면 호출된
+    // 메서드 이름인 `EXCHANGE`가 HTTP 메서드로 들어가므로 그 호출을 버린다.
+    if let Some(index) = rule.method_arg {
+        return argument_at(args, index, syntax).and_then(|n| http_method_of(n, src, syntax));
+    }
+    // 3. 체이닝. `webClient.get().uri(...)`
+    if !rule.method_from_receiver.is_empty() {
+        return receiver_call_method(receiver?, src, syntax).map(|m| m.to_ascii_uppercase());
+    }
+    // 4. 규칙에 고정된 값
+    if let Some(method) = &rule.method {
+        return Some(method.clone());
+    }
+    // 5. 호출된 메서드 이름이 곧 HTTP 메서드다.
+    //    C# `GetAsync`처럼 접미가 붙는 관용구를 벗긴다.
+    Some(
+        callee
+            .to_ascii_lowercase()
+            .trim_end_matches("async")
+            .to_ascii_uppercase(),
+    )
+}
+
+/// 이 호출의 URL 조각들을 꺼낸다.
+fn url_of(
+    rule: &crate::rules::HttpClientRule,
+    args: Node,
+    src: &[u8],
+    syntax: &crate::rules::LangSyntax,
+    constants: &std::collections::HashMap<String, String>,
+) -> Option<UrlTemplate> {
+    // 설정 객체 형태를 먼저 본다. `axios({ method, url })`
+    //
+    // 설정 객체가 없으면 자리로 찾는다. `axios("/api/x")`도 쓰는 형태라
+    // 여기서 끊으면 안 된다.
+    if let Some(key) = &rule.url_option {
+        if let Some(node) = option_value(args, key, src, syntax) {
+            return Some(url_template_of(node, src, syntax, constants));
+        }
+    }
+    url_argument_at(args, src, rule.url_arg, syntax, constants)
+}
+
 /// C#처럼 실인자가 한 겹 감싸여 있으면 안쪽 노드를 꺼낸다.
 fn unwrap_argument<'a>(arg: Node<'a>, syntax: &crate::rules::LangSyntax) -> Node<'a> {
     match syntax.arg_wrapper.as_deref() {
@@ -887,8 +1104,12 @@ fn unwrap_argument<'a>(arg: Node<'a>, syntax: &crate::rules::LangSyntax) -> Node
 
 fn has_function_argument(args: Node, syntax: &crate::rules::LangSyntax) -> bool {
     let mut cursor = args.walk();
-    args.children(&mut cursor)
-        .any(|a| syntax.lambda.iter().any(|k| k == unwrap_argument(a, syntax).kind()))
+    args.children(&mut cursor).any(|a| {
+        syntax
+            .lambda
+            .iter()
+            .any(|k| k == unwrap_argument(a, syntax).kind())
+    })
 }
 
 /// 인자 노드 하나를 경로 조각들로 푼다.
@@ -1055,23 +1276,7 @@ fn url_argument_at(
     syntax: &crate::rules::LangSyntax,
     constants: &std::collections::HashMap<String, String>,
 ) -> Option<UrlTemplate> {
-    let mut cursor = args.walk();
-    let mut position = 0usize;
-    for arg in args.children(&mut cursor) {
-        if matches!(arg.kind(), "(" | ")" | ",") {
-            continue;
-        }
-        if position == index {
-            return Some(url_template_of(
-                unwrap_argument(arg, syntax),
-                src,
-                syntax,
-                constants,
-            ));
-        }
-        position += 1;
-    }
-    None
+    argument_at(args, index, syntax).map(|arg| url_template_of(arg, src, syntax, constants))
 }
 
 ///
@@ -1170,7 +1375,8 @@ mod tests {
 
     fn ts_tree(src: &str) -> (tree_sitter::Tree, Vec<u8>) {
         let mut p = Parser::new();
-        p.set_language(&tree_sitter_typescript::LANGUAGE_TSX.into()).unwrap();
+        p.set_language(&tree_sitter_typescript::LANGUAGE_TSX.into())
+            .unwrap();
         (p.parse(src, None).unwrap(), src.as_bytes().to_vec())
     }
 
@@ -1179,7 +1385,10 @@ mod tests {
         // 프런트–백엔드 매칭이 문자열 비교로 끝나야 한다.
         assert_eq!(normalize_route_path("/api/orders/{id}"), "/api/orders/{}");
         assert_eq!(normalize_route_path("/api/orders/:id"), "/api/orders/{}");
-        assert_eq!(normalize_route_path("`/api/orders/${id}`"), "/api/orders/{}");
+        assert_eq!(
+            normalize_route_path("`/api/orders/${id}`"),
+            "/api/orders/{}"
+        );
         assert_eq!(normalize_route_path("/api/orders/"), "/api/orders");
         assert_eq!(normalize_route_path("articles"), "/articles");
         assert_eq!(
@@ -1214,10 +1423,20 @@ public class ArticleController {
             .map(|r| (r.method.clone(), r.path.clone(), r.handler.clone()))
             .collect();
 
-        assert!(routes.contains(&("GET".into(), "/api/articles/{}".into(), "get".into())), "{routes:?}");
-        assert!(routes.contains(&("POST".into(), "/api/articles".into(), "create".into())), "{routes:?}");
         assert!(
-            routes.contains(&("DELETE".into(), "/api/articles/{}/favorite".into(), "unfavorite".into())),
+            routes.contains(&("GET".into(), "/api/articles/{}".into(), "get".into())),
+            "{routes:?}"
+        );
+        assert!(
+            routes.contains(&("POST".into(), "/api/articles".into(), "create".into())),
+            "{routes:?}"
+        );
+        assert!(
+            routes.contains(&(
+                "DELETE".into(),
+                "/api/articles/{}/favorite".into(),
+                "unfavorite".into()
+            )),
             "{routes:?}"
         );
     }
@@ -1306,12 +1525,23 @@ export function useArticle(slug) {
         let (tree, bytes) = ts_tree(src);
         let rules = FrameworkRules::effective(&FrameworkRules::default());
         let calls = extract_api_calls(tree.root_node(), &bytes, "typescript", &rules);
-        let pairs: Vec<(String, String)> =
-            calls.iter().map(|c| (c.method.clone(), c.path.clone())).collect();
+        let pairs: Vec<(String, String)> = calls
+            .iter()
+            .map(|c| (c.method.clone(), c.path.clone()))
+            .collect();
 
-        assert!(pairs.contains(&("GET".into(), "/api/articles/{}".into())), "{pairs:?}");
-        assert!(pairs.contains(&("GET".into(), "/api/tags".into())), "{pairs:?}");
-        assert!(pairs.contains(&("POST".into(), "/api/articles".into())), "{pairs:?}");
+        assert!(
+            pairs.contains(&("GET".into(), "/api/articles/{}".into())),
+            "{pairs:?}"
+        );
+        assert!(
+            pairs.contains(&("GET".into(), "/api/tags".into())),
+            "{pairs:?}"
+        );
+        assert!(
+            pairs.contains(&("POST".into(), "/api/articles".into())),
+            "{pairs:?}"
+        );
         // useState("")·map()은 HTTP 호출이 아니다.
         assert_eq!(pairs.len(), 3, "오탐: {pairs:?}");
     }
@@ -1333,7 +1563,9 @@ mod persistence_tests {
     #[test]
     fn sql_table_extraction_handles_mybatis_templates() {
         // MyBatis SQL은 #{param}·<if> 조각이 섞여 정식 파싱이 자주 실패한다.
-        let t = tables_in_sql("SELECT * FROM orders o JOIN order_items i ON o.id = i.order_id WHERE o.id = #{id}");
+        let t = tables_in_sql(
+            "SELECT * FROM orders o JOIN order_items i ON o.id = i.order_id WHERE o.id = #{id}",
+        );
         let names: Vec<&str> = t.iter().map(|(n, _)| n.as_str()).collect();
         assert!(names.contains(&"orders"), "{t:?}");
         assert!(names.contains(&"order_items"), "{t:?}");
@@ -1350,13 +1582,15 @@ mod persistence_tests {
 
     #[test]
     fn jpa_entity_and_table() {
-        let f = java(r#"
+        let f = java(
+            r#"
 @Entity
 @Table(name = "orders")
 public class Order {
     private Long id;
 }
-"#);
+"#,
+        );
         assert_eq!(f.entities.len(), 1);
         assert_eq!(f.entities[0].name, "Order");
         assert_eq!(f.entities[0].table.as_deref(), Some("orders"));
@@ -1364,7 +1598,8 @@ public class Order {
 
     #[test]
     fn mybatis_annotation_mapper() {
-        let f = java(r#"
+        let f = java(
+            r#"
 @Mapper
 public interface OrderMapper {
     @Select("SELECT * FROM orders WHERE id = #{id}")
@@ -1373,10 +1608,15 @@ public interface OrderMapper {
     @Insert("INSERT INTO orders (name) VALUES (#{name})")
     void save(Order order);
 }
-"#);
+"#,
+        );
         // 인터페이스 메서드는 method_declaration 이 아닐 수 있으므로 테이블 참조로 확인한다.
         let tables: Vec<&str> = f.table_refs.iter().map(|t| t.table.as_str()).collect();
-        assert!(tables.contains(&"orders"), "MyBatis 매퍼에서 테이블을 못 찾음: {:?}", f.table_refs);
+        assert!(
+            tables.contains(&"orders"),
+            "MyBatis 매퍼에서 테이블을 못 찾음: {:?}",
+            f.table_refs
+        );
     }
 }
 
@@ -1395,7 +1635,10 @@ mod python_csharp_tests {
 
     #[test]
     fn fastapi_and_flask_routes() {
-        let f = facts("python", tree_sitter_python::LANGUAGE.into(), r#"
+        let f = facts(
+            "python",
+            tree_sitter_python::LANGUAGE.into(),
+            r#"
 @app.get("/api/orders/{order_id}")
 def get_order(order_id: int):
     return None
@@ -1411,34 +1654,54 @@ def legacy():
 @cache.get("/not-a-route")
 def cached():
     return None
-"#);
+"#,
+        );
         let got: Vec<(String, String, String)> = f
             .routes
             .iter()
             .map(|r| (r.method.clone(), r.path.clone(), r.handler.clone()))
             .collect();
 
-        assert!(got.contains(&("GET".into(), "/api/orders/{}".into(), "get_order".into())), "{got:?}");
-        assert!(got.contains(&("POST".into(), "/api/orders".into(), "create_order".into())), "{got:?}");
-        assert!(got.contains(&("POST".into(), "/legacy".into(), "legacy".into())), "Flask methods=: {got:?}");
+        assert!(
+            got.contains(&("GET".into(), "/api/orders/{}".into(), "get_order".into())),
+            "{got:?}"
+        );
+        assert!(
+            got.contains(&("POST".into(), "/api/orders".into(), "create_order".into())),
+            "{got:?}"
+        );
+        assert!(
+            got.contains(&("POST".into(), "/legacy".into(), "legacy".into())),
+            "Flask methods=: {got:?}"
+        );
         // @cache.get 은 라우트가 아니다
-        assert!(!got.iter().any(|(_, p, _)| p.contains("not-a-route")), "오탐: {got:?}");
+        assert!(
+            !got.iter().any(|(_, p, _)| p.contains("not-a-route")),
+            "오탐: {got:?}"
+        );
     }
 
     #[test]
     fn sqlalchemy_tablename() {
-        let f = facts("python", tree_sitter_python::LANGUAGE.into(), r#"
+        let f = facts(
+            "python",
+            tree_sitter_python::LANGUAGE.into(),
+            r#"
 class Order(Base):
     __tablename__ = "orders"
     id = Column(Integer, primary_key=True)
-"#);
+"#,
+        );
         assert_eq!(f.entities.len(), 1, "{:?}", f.entities);
         assert_eq!(f.entities[0].table.as_deref(), Some("orders"));
     }
 
     #[test]
     fn aspnet_attributes() {
-        let f = facts("csharp", tree_sitter_c_sharp::LANGUAGE.into(), r#"
+        let f = facts(
+            "csharp",
+            tree_sitter_c_sharp::LANGUAGE.into(),
+            r#"
 [ApiController]
 [Route("api/orders")]
 public class OrderController : ControllerBase
@@ -1449,12 +1712,26 @@ public class OrderController : ControllerBase
     [HttpPost]
     public IActionResult Create() { return null; }
 }
-"#);
-        let got: Vec<(String, String)> =
-            f.routes.iter().map(|r| (r.method.clone(), r.path.clone())).collect();
-        assert!(got.contains(&("GET".into(), "/api/orders/{}".into())), "{got:?}");
-        assert!(got.contains(&("POST".into(), "/api/orders".into())), "{got:?}");
-        assert!(f.beans.iter().any(|b| b.name == "OrderController"), "{:?}", f.beans);
+"#,
+        );
+        let got: Vec<(String, String)> = f
+            .routes
+            .iter()
+            .map(|r| (r.method.clone(), r.path.clone()))
+            .collect();
+        assert!(
+            got.contains(&("GET".into(), "/api/orders/{}".into())),
+            "{got:?}"
+        );
+        assert!(
+            got.contains(&("POST".into(), "/api/orders".into())),
+            "{got:?}"
+        );
+        assert!(
+            f.beans.iter().any(|b| b.name == "OrderController"),
+            "{:?}",
+            f.beans
+        );
     }
 
     // ── HTTP 클라이언트 호출: 네 언어 ──────────────────────────────────
@@ -1620,7 +1897,10 @@ class Gateway {
             UrlPart::Literal("/items".into()),
         ]);
         t.fill(&std::collections::HashMap::new());
-        assert_eq!(t, UrlTemplate(vec![UrlPart::Unknown, UrlPart::Literal("/items".into())]));
+        assert_eq!(
+            t,
+            UrlTemplate(vec![UrlPart::Unknown, UrlPart::Literal("/items".into())])
+        );
         assert_eq!(t.render(), "{}/items");
         assert!(t.is_dynamic(), "앞을 모르면 어떤 엔드포인트인지 알 수 없다");
     }
@@ -1658,7 +1938,10 @@ class Gateway {
             r#"class C { void m() { rest.getForObject("/api/article" + suffix, String.class); } }"#,
         );
         assert_eq!(calls.len(), 1, "{calls:?}");
-        assert!(calls[0].template.has_unresolved(), "이름이 남아 있어야 한다");
+        assert!(
+            calls[0].template.has_unresolved(),
+            "이름이 남아 있어야 한다"
+        );
 
         let mut t = calls[0].template.clone();
         t.fill(&std::collections::HashMap::new());
@@ -1694,7 +1977,10 @@ class Gateway {
             tree_sitter_java::LANGUAGE.into(),
             r#"class C { void m() { routes.put("/api/articles", handler); } }"#,
         );
-        assert!(calls.is_empty(), "Map.put 을 API 호출로 오인했다: {calls:?}");
+        assert!(
+            calls.is_empty(),
+            "Map.put 을 API 호출로 오인했다: {calls:?}"
+        );
     }
 
     #[test]
@@ -1721,5 +2007,269 @@ class Gateway {
             r#"class C { void M() { http.GetAsync("/api/x", r => r); } }"#,
         );
         assert!(cs.is_empty(), "{cs:?}");
+    }
+}
+
+#[cfg(test)]
+mod api_call_shapes {
+    use super::*;
+    use tree_sitter::Parser;
+
+    fn calls(lang: &str, language: tree_sitter::Language, src: &str) -> Vec<ApiCallFact> {
+        let mut p = Parser::new();
+        p.set_language(&language).unwrap();
+        let tree = p.parse(src, None).unwrap();
+        let rules = crate::rules::FrameworkRules::effective(&Default::default());
+        extract_api_calls(tree.root_node(), src.as_bytes(), lang, &rules)
+    }
+
+    /// 실제 코드에서 흔한 호출 형태를 하나씩 확인한다.
+    ///
+    /// 표로 둔 이유가 있다. 형태 하나를 놓치면 그 프로젝트의 호출이 통째로
+    /// 빠지는데, 오류가 나지 않고 결과만 조용히 빈다. 처음 재어 보았을 때
+    /// 스무 가지 중 열한 가지만 잡혔다.
+    #[test]
+    fn detects_the_shapes_real_code_uses() {
+        let ts: tree_sitter::Language = tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into();
+        let java: tree_sitter::Language = tree_sitter_java::LANGUAGE.into();
+        let py: tree_sitter::Language = tree_sitter_python::LANGUAGE.into();
+        let cs: tree_sitter::Language = tree_sitter_c_sharp::LANGUAGE.into();
+
+        let cases: Vec<(&str, &str, tree_sitter::Language, &str, &str, &str)> = vec![
+            (
+                "ts axios.get",
+                "typescript",
+                ts.clone(),
+                r#"axios.get("/api/orders");"#,
+                "GET",
+                "/api/orders",
+            ),
+            (
+                "ts axios.post",
+                "typescript",
+                ts.clone(),
+                r#"axios.post("/api/orders", body);"#,
+                "POST",
+                "/api/orders",
+            ),
+            (
+                "ts fetch",
+                "typescript",
+                ts.clone(),
+                r#"fetch("/api/orders");"#,
+                "GET",
+                "/api/orders",
+            ),
+            (
+                "ts fetch+method",
+                "typescript",
+                ts.clone(),
+                r#"fetch("/api/orders", { method: "POST" });"#,
+                "POST",
+                "/api/orders",
+            ),
+            (
+                "ts fetch+메서드상수",
+                "typescript",
+                ts.clone(),
+                r#"fetch("/api/orders", { method: "DELETE", headers: h });"#,
+                "DELETE",
+                "/api/orders",
+            ),
+            (
+                "ts axios 설정객체",
+                "typescript",
+                ts.clone(),
+                r#"axios({ method: "post", url: "/api/orders" });"#,
+                "POST",
+                "/api/orders",
+            ),
+            (
+                "ts 템플릿",
+                "typescript",
+                ts.clone(),
+                r#"fetch(`/api/orders/${id}`);"#,
+                "GET",
+                "/api/orders/{}",
+            ),
+            (
+                "ts 인스턴스",
+                "typescript",
+                ts.clone(),
+                r#"const api = axios.create({baseURL:"/api"}); api.get("/orders");"#,
+                "GET",
+                "/orders",
+            ),
+            (
+                "java getForObject",
+                "java",
+                java.clone(),
+                r#"class C{void m(){rest.getForObject("/api/orders", X.class);}}"#,
+                "GET",
+                "/api/orders",
+            ),
+            (
+                "java exchange",
+                "java",
+                java.clone(),
+                r#"class C{void m(){rest.exchange("/api/orders", HttpMethod.POST, e, X.class);}}"#,
+                "POST",
+                "/api/orders",
+            ),
+            (
+                "java exchange GET",
+                "java",
+                java.clone(),
+                r#"class C{void m(){rest.exchange("/api/orders", HttpMethod.GET, e, X.class);}}"#,
+                "GET",
+                "/api/orders",
+            ),
+            (
+                "java WebClient 체이닝",
+                "java",
+                java.clone(),
+                r#"class C{void m(){web.get().uri("/api/orders").retrieve();}}"#,
+                "GET",
+                "/api/orders",
+            ),
+            (
+                "java WebClient post",
+                "java",
+                java.clone(),
+                r#"class C{void m(){web.post().uri("/api/orders").bodyValue(b).retrieve();}}"#,
+                "POST",
+                "/api/orders",
+            ),
+            (
+                "java String.format",
+                "java",
+                java.clone(),
+                r#"class C{void m(){rest.getForObject(String.format("/api/orders/%s", id), X.class);}}"#,
+                "GET",
+                "/api/orders/{}",
+            ),
+            (
+                "py requests.post",
+                "python",
+                py.clone(),
+                r#"requests.post("/api/orders")"#,
+                "POST",
+                "/api/orders",
+            ),
+            (
+                "py requests.request",
+                "python",
+                py.clone(),
+                r#"requests.request("POST", "/api/orders")"#,
+                "POST",
+                "/api/orders",
+            ),
+            (
+                "py f-string",
+                "python",
+                py.clone(),
+                r#"httpx.get(f"/api/orders/{id}")"#,
+                "GET",
+                "/api/orders/{}",
+            ),
+            (
+                "cs GetAsync",
+                "csharp",
+                cs.clone(),
+                r#"class C{void M(){http.GetAsync("/api/orders");}}"#,
+                "GET",
+                "/api/orders",
+            ),
+            (
+                "cs PostAsJsonAsync",
+                "csharp",
+                cs.clone(),
+                r#"class C{void M(){http.PostAsJsonAsync("/api/orders", b);}}"#,
+                "POST",
+                "/api/orders",
+            ),
+            (
+                "cs 보간문자열",
+                "csharp",
+                cs.clone(),
+                r#"class C{void M(){http.GetAsync($"/api/orders/{id}");}}"#,
+                "GET",
+                "/api/orders/{}",
+            ),
+        ];
+
+        // 잡으면 안 되는 것들. 새 규칙이 넓어졌으므로 함께 본다.
+        let negatives: Vec<(&str, &str, tree_sitter::Language, &str)> = vec![
+            (
+                "ts 라우트 정의",
+                "typescript",
+                ts.clone(),
+                r#"router.get("/api/orders", handler);"#,
+            ),
+            (
+                "ts 목 서버",
+                "typescript",
+                ts.clone(),
+                r#"this.post("/api/orders", () => {});"#,
+            ),
+            (
+                "ts 상태 훅",
+                "typescript",
+                ts.clone(),
+                r#"const [v, s] = useState("");"#,
+            ),
+            (
+                "java 맵 조회",
+                "java",
+                java.clone(),
+                r#"class C{void m(){map.get("orders");}}"#,
+            ),
+            (
+                "java 스레드 실행",
+                "java",
+                java.clone(),
+                r#"class C{void m(){executor.execute(task);}}"#,
+            ),
+            (
+                "java uri 빌더",
+                "java",
+                java.clone(),
+                r#"class C{void m(){builder.uri("/api/orders");}}"#,
+            ),
+            (
+                "java 메서드 모름",
+                "java",
+                java.clone(),
+                r#"class C{void m(){rest.exchange("/api/orders", verb, e, X.class);}}"#,
+            ),
+            (
+                "py 캐시 조회",
+                "python",
+                py.clone(),
+                r#"cache.get("orders")"#,
+            ),
+            (
+                "cs 캐시 조회",
+                "csharp",
+                cs.clone(),
+                r#"class C{void M(){cache.GetAsync("orders");}}"#,
+            ),
+        ];
+        for (name, lang, language, src) in &negatives {
+            let found = calls(lang, language.clone(), src);
+            assert!(found.is_empty(), "{name} 을 호출로 잘못 잡았다: {found:?}");
+        }
+
+        for (name, lang, language, src, method, path) in &cases {
+            let found = calls(lang, language.clone(), src);
+            let Some(fact) = found.first() else {
+                panic!("{name} 을 놓쳤다. 기대: {method} {path}");
+            };
+            assert_eq!(
+                (fact.method.as_str(), fact.path.as_str()),
+                (*method, *path),
+                "{name}"
+            );
+        }
     }
 }

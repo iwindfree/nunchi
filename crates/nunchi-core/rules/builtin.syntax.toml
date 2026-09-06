@@ -60,6 +60,10 @@ declaration = ["variable_declarator"]
 declaration_name_field = "name"
 declaration_value_field = "value"
 member_is_call = false
+object = ["object"]
+object_entry = ["pair"]
+object_key_field = "key"
+object_value_field = "value"
 
 [[lang_syntax]]
 lang = "javascript"
@@ -80,6 +84,10 @@ declaration = ["variable_declarator"]
 declaration_name_field = "name"
 declaration_value_field = "value"
 member_is_call = false
+object = ["object"]
+object_entry = ["pair"]
+object_key_field = "key"
+object_value_field = "value"
 
 # ── Python ────────────────────────────────────────────────────────
 # f-문자열도 `string` 노드다. 접두 `f`는 값을 읽을 때 벗긴다.
@@ -97,6 +105,10 @@ declaration = ["assignment"]
 declaration_name_field = "left"
 declaration_value_field = "right"
 member_is_call = false
+object = ["dictionary"]
+object_entry = ["pair"]
+object_key_field = "key"
+object_value_field = "value"
 
 # ── Java ──────────────────────────────────────────────────────────
 # `method_invocation`이 `object`와 `name` 필드를 직접 갖는다. 그래서 수신자와

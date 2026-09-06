@@ -8,13 +8,46 @@
 # 이 파일은 `builtin.<언어>.toml` 묶음의 하나다. 전체 구성은
 # `builtin.syntax.toml`의 머리말에 적어 두었다.
 
+# fetch 는 메서드를 두 번째 인자의 설정 객체에 적는다.
+# `method_option` 이 없으면 POST·PUT·DELETE 가 전부 GET 으로 기록되어
+# 라우트를 엉뚱한 곳에 잇는다. 프런트엔드에서 GET 이 아닌 호출은 거의
+# 전부 이 형태다.
 [[http_client]]
 lang = "typescript"
 callee = "fetch"
 receiver_methods = []
 method = "GET"
+method_option = "method"
 url_arg = 0
 exclude_receivers = []
+
+# `axios({ method: "post", url: "/api/orders" })` — 설정 객체 하나로 부르는 형태.
+# `axios("/api/orders")` 도 쓰므로 설정 객체가 없으면 첫 인자를 URL 로 읽는다.
+[[http_client]]
+lang = "typescript"
+callee = "axios"
+receiver_methods = []
+method = "GET"
+method_option = "method"
+url_option = "url"
+url_arg = 0
+exclude_receivers = []
+
+# `axios.request({ method, url })` — 위와 같은 형태를 메서드로 부르는 것.
+[[http_client]]
+lang = "typescript"
+receiver_methods = ["request"]
+method = "GET"
+method_option = "method"
+url_option = "url"
+url_arg = 0
+exclude_receivers = [
+    "this",
+    "app",
+    "router",
+    "server",
+    "mock",
+]
 
 [[http_client]]
 lang = "typescript"

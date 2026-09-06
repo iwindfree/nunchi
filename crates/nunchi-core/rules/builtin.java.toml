@@ -113,6 +113,39 @@ receiver_methods = ["delete"]
 method = "DELETE"
 url_arg = 0
 
+# `rest.exchange(url, HttpMethod.POST, entity, X.class)` — RestTemplate 에서
+# 본문이나 헤더를 실어 보낼 때 쓰는 형태다. 메서드가 인자로 오므로
+# `method_arg` 로 읽는다. 그 자리를 읽지 못하면 호출을 버린다. 메서드를
+# 모르면 어느 라우트에 이어야 할지 정할 수 없기 때문이다.
+[[http_client]]
+lang = "java"
+receiver_methods = [
+    "exchange",
+    "execute",
+]
+method_arg = 1
+url_arg = 0
+exclude_receivers = []
+
+# `webClient.get().uri("/api/orders").retrieve()` — Spring 5 부터 RestTemplate
+# 을 대신하는 형태다. HTTP 메서드가 `uri` 앞의 호출에 있으므로 수신자를
+# 한 겹 더 들여다본다. `builder.uri(...)` 같은 것을 잡지 않도록,
+# 수신자가 여기 적힌 이름으로 부른 호출일 때만 인정한다.
+[[http_client]]
+lang = "java"
+receiver_methods = ["uri"]
+method_from_receiver = [
+    "get",
+    "post",
+    "put",
+    "delete",
+    "patch",
+    "head",
+    "options",
+]
+url_arg = 0
+exclude_receivers = []
+
 
 
 # JPA와 MyBatis 어노테이션 매퍼 — MyBatis는 한국 기업 Spring 환경에서
