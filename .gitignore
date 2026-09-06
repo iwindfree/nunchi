@@ -15,3 +15,6 @@ nunchi.toml
 
 # Tauri 빌드 산출물
 crates/nunchi-desktop/gen/
+
+# macOS Finder 가 폴더를 열 때마다 만드는 파일
+.DS_Store
