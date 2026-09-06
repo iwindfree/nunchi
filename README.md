@@ -98,8 +98,15 @@ Rust 1.90 이상이 필요합니다. macOS와 Windows에서 각각 네이티브�
 탐색, 팩 미리보기, 설정 편집을 모두 화면에서 합니다.
 
 ```bash
-cargo install tauri-cli --version "^2"
 cargo run -p nunchi-desktop
+```
+
+평소 쓰실 것은 릴리스 빌드가 낫습니다. 처음 빌드에 시간이 걸리는 대신 실행이
+빠르고 파일도 작습니다.
+
+```bash
+cargo build --release -p nunchi-desktop
+./target/release/nunchi-desktop
 ```
 
 Tauri 2로 만들었으며 운영체제에 이미 들어 있는 웹뷰를 씁니다. 브라우저를 담지
