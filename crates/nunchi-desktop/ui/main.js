@@ -60,6 +60,9 @@ function overviewView() {
         <dt>설정 파일</dt><dd><code>${esc(c.path)}</code></dd>
         <dt>프레임워크 규칙</dt><dd>${c.rule_count}개</dd>
       </dl>
+      <div class="actions">
+        <button class="action" id="edit-repos">저장소 변경</button>
+      </div>
     </div>
 
     ${index}`;
@@ -112,7 +115,16 @@ function languageTable(m) {
 
 // ── 초기 설정 마법사 ─────────────────────────────────────
 /** 설정을 만들기 전까지 들고 있는 입력값. */
-const draft = { dir: "", repos: [], name: "", languages: null, error: null, busy: false };
+const draft = {
+  dir: "",
+  repos: [],
+  name: "",
+  languages: null,
+  error: null,
+  busy: false,
+  /// 이미 있는 설정을 고치는 중인가. 그렇다면 덮어쓴다.
+  overwrite: false,
+};
 
 async function pickRepo() {
   const path = await invoke("pick_folder");
@@ -160,7 +172,7 @@ async function createConfig() {
       dir: draft.dir,
       repos: draft.repos,
       name: draft.name,
-      force: false,
+      force: draft.overwrite,
     });
     // 설정이 생겼으니 개요를 다시 읽어 화면을 갱신한다.
     data = await invoke("overview");
@@ -200,8 +212,12 @@ function setupView() {
   const ready = draft.repos.length > 0 && draft.dir && !draft.busy;
 
   return `
-    <h2>시작하기</h2>
-    <p class="lead">인덱싱할 저장소를 고르면 설정 파일을 만들어 드립니다.</p>
+    <h2>${draft.overwrite ? "저장소 변경" : "시작하기"}</h2>
+    <p class="lead">${
+      draft.overwrite
+        ? "저장소를 더하거나 빼면 설정 파일을 다시 씁니다."
+        : "인덱싱할 저장소를 고르면 설정 파일을 만들어 드립니다."
+    }</p>
 
     ${draft.error ? `<div class="error">${esc(draft.error)}</div>` : ""}
 
@@ -235,9 +251,16 @@ function setupView() {
 
     <div class="actions">
       <button class="primary" id="create" ${ready ? "" : "disabled"}>
-        ${draft.busy ? "만드는 중입니다" : "설정 만들기"}
+        ${draft.busy ? "만드는 중입니다" : draft.overwrite ? "설정 덮어쓰기" : "설정 만들기"}
       </button>
-    </div>`;
+      ${draft.overwrite ? `<button class="action" id="cancel">취소</button>` : ""}
+    </div>
+    ${
+      draft.overwrite
+        ? `<p class="note">저장소를 바꾸면 기존 인덱스가 실제 코드와 어긋납니다.
+             설정을 저장한 뒤 다시 인덱싱하십시오.</p>`
+        : ""
+    }`;
 }
 
 /** 마법사 화면의 버튼과 입력을 연결한다. */
@@ -245,6 +268,11 @@ function bindSetup() {
   document.getElementById("add-repo")?.addEventListener("click", pickRepo);
   document.getElementById("pick-dir")?.addEventListener("click", pickDir);
   document.getElementById("create")?.addEventListener("click", createConfig);
+  document.getElementById("cancel")?.addEventListener("click", () => {
+    draft.overwrite = false;
+    draft.error = null;
+    show("overview");
+  });
   document.querySelectorAll("[data-remove]").forEach((b) =>
     b.addEventListener("click", () => removeRepo(b.dataset.remove))
   );
@@ -266,6 +294,19 @@ const views = {
   settings: () => soon("설정", "설정 파일을 폼으로 편집합니다."),
 };
 
+/** 기존 설정을 마법사에 채워 넣고 그 화면으로 옮긴다. */
+function editRepos() {
+  const c = data.config;
+  draft.repos = c.repos.map((r) => r.path);
+  draft.name = c.solution;
+  // 설정 파일이 있던 자리에 다시 만든다.
+  draft.dir = c.path.replace(/[/\\]nunchi\.toml$/, "");
+  draft.languages = null;
+  draft.error = null;
+  draft.overwrite = true;
+  refreshLanguages().then(() => show("setup"));
+}
+
 function show(name) {
   document.querySelectorAll(".nav").forEach((b) => {
     if (b.dataset.view === name) b.setAttribute("aria-current", "page");
@@ -273,6 +314,7 @@ function show(name) {
   });
   document.getElementById("view").innerHTML = views[name]();
   if (name === "setup" || (name === "overview" && !data.config)) bindSetup();
+  document.getElementById("edit-repos")?.addEventListener("click", editRepos);
 }
 
 async function start() {
