@@ -377,6 +377,123 @@ function bindSetup() {
   if (nameInput) nameInput.addEventListener("input", (e) => (draft.name = e.target.value));
 }
 
+// ── 인덱싱 ───────────────────────────────────────────────
+/** 인덱싱이 도는 동안의 상태. 이벤트를 받아 갱신한다. */
+const job = { running: false, message: null, error: null, stats: null, rebuild: false };
+
+function indexView() {
+  if (!data || !data.config) {
+    return `<h2>인덱싱</h2>
+      <div class="empty">
+        <strong>먼저 솔루션을 여십시오.</strong>
+        왼쪽 아래의 솔루션 이름을 누르면 목록이 나옵니다.
+      </div>`;
+  }
+
+  const done = job.stats
+    ? `<div class="panel">
+         <h3>마지막 결과</h3>
+         <div class="stats">
+           <div class="stat"><div class="n">${num(job.stats.files_indexed)}</div><div class="k">파일</div></div>
+           <div class="stat"><div class="n">${num(job.stats.nodes)}</div><div class="k">노드</div></div>
+           <div class="stat"><div class="n">${num(job.stats.edges)}</div><div class="k">엣지</div></div>
+           <div class="stat"><div class="n">${cacheRate(job.stats)}</div><div class="k">캐시 적중</div></div>
+         </div>
+       </div>`
+    : "";
+
+  const status = job.running
+    ? `<div class="panel"><h3>진행 상황</h3><p>${esc(job.message ?? "시작하는 중입니다.")}</p></div>`
+    : "";
+
+  return `
+    <h2>인덱싱</h2>
+    <p class="lead">저장소를 훑어 그래프를 만듭니다.</p>
+    ${job.error ? `<div class="error">${esc(job.error)}</div>` : ""}
+    ${status}
+    <div class="panel">
+      <h3>실행</h3>
+      <label class="row" style="gap:6px;margin-bottom:12px">
+        <input type="checkbox" id="rebuild" ${job.rebuild ? "checked" : ""} />
+        <span>인덱스를 지우고 처음부터 다시 만듭니다</span>
+      </label>
+      <button class="primary" id="run-index" ${job.running ? "disabled" : ""}>
+        ${job.running ? "인덱싱 중입니다" : "인덱싱 시작"}
+      </button>
+      <p class="note">파싱 결과는 내용 해시로 캐시되므로 두 번째부터는 훨씬 빠릅니다.
+        브랜치를 오갈 때도 다시 파싱하지 않습니다.</p>
+    </div>
+    ${done}`;
+}
+
+function cacheRate(s) {
+  const total = (s.cache_hits ?? 0) + (s.cache_misses ?? 0);
+  if (total === 0) return "0%";
+  return Math.round(((s.cache_hits ?? 0) / total) * 100) + "%";
+}
+
+/** 진행 상황 이벤트를 사람이 읽을 문장으로 바꾼다. */
+function describeProgress(p) {
+  switch (p.stage) {
+    case "repo_started":
+      return `저장소 ${p.index}/${p.total} — ${p.repo}`;
+    case "scanning":
+      return `${p.repo} 를 훑는 중입니다. 파일 ${num(p.files)}개를 처리했습니다.`;
+    case "resolving":
+      return "파일 사이의 참조를 잇는 중입니다.";
+    case "history":
+      return "git 이력을 읽는 중입니다.";
+    case "saving":
+      return "데이터베이스에 쓰는 중입니다.";
+    default:
+      return "진행 중입니다.";
+  }
+}
+
+async function runIndex() {
+  job.running = true;
+  job.error = null;
+  job.message = null;
+  job.stats = null;
+  show("index");
+  try {
+    await invoke("start_index", { rebuild: job.rebuild });
+  } catch (e) {
+    job.running = false;
+    job.error = String(e);
+    show("index");
+  }
+}
+
+function bindIndex() {
+  document.getElementById("run-index")?.addEventListener("click", runIndex);
+  document.getElementById("rebuild")?.addEventListener("change", (e) => {
+    job.rebuild = e.target.checked;
+  });
+}
+
+/** 인덱싱 진행과 완료 이벤트를 받는다. */
+async function listenIndexEvents() {
+  const listen = window.__TAURI__?.event?.listen;
+  if (!listen) return;
+  await listen("index-progress", (e) => {
+    job.message = describeProgress(e.payload);
+    // 인덱싱 화면을 보고 있을 때만 다시 그린다.
+    if (document.querySelector('.nav[data-view="index"][aria-current]')) show("index");
+  });
+  await listen("index-done", async (e) => {
+    job.running = false;
+    if (e.payload.ok) {
+      job.stats = e.payload.stats;
+      // 인덱스가 새로 생겼으니 개요도 갱신한다.
+      data = await invoke("overview");
+    } else {
+      job.error = e.payload.error;
+    }
+    show("index");
+  });
+}
+
 // ── 아직 만들지 않은 화면 ────────────────────────────────
 const soon = (title, note) => {
   if (!data || !data.config) {
@@ -393,7 +510,7 @@ const views = {
   overview: overviewView,
   solutions: solutionsView,
   setup: setupView,
-  index: () => soon("인덱싱", "다음 단계에서 실행 버튼과 진행 표시를 붙입니다."),
+  index: indexView,
   explore: () => soon("탐색", "심볼과 이웃을 찾는 화면입니다."),
   pack: () => soon("팩", "질의를 넣고 가중치를 조정하며 결과를 봅니다."),
   settings: () => soon("설정", "설정 파일을 폼으로 편집합니다."),
@@ -420,6 +537,7 @@ function show(name) {
   document.getElementById("view").innerHTML = views[name]();
   if (name === "setup") bindSetup();
   if (name === "solutions") bindSolutions();
+  if (name === "index") bindIndex();
   document.getElementById("edit-repos")?.addEventListener("click", editRepos);
 }
 
@@ -439,6 +557,7 @@ async function start() {
     b.addEventListener("click", () => show(b.dataset.view))
   );
   document.getElementById("solution-label").addEventListener("click", () => show("solutions"));
+  await listenIndexEvents();
 
   let boot;
   try {

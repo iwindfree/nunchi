@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::process::Command;
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, serde::Serialize)]
 pub struct IndexStats {
     pub repos: usize,
     pub files_seen: usize,
@@ -107,10 +107,43 @@ pub fn index_all(config: &Config, store: &mut SqliteStore) -> Result<IndexStats>
 }
 
 /// 캐시를 함께 쓰는 인덱싱. 브랜치 전환 시 재파싱을 피한다(docs/DESIGN.md 9절).
+/// 인덱싱이 어디까지 왔는지 알린다.
+///
+/// 저장소가 크면 수십 초가 걸리므로 화면이 멈춘 것처럼 보인다. 데스크톱 앱이
+/// 이것을 받아 진행 상황을 그린다. CLI와 MCP 서버는 `None`을 넘기면 된다.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(tag = "stage", rename_all = "snake_case")]
+pub enum Progress {
+    /// 저장소 하나를 훑기 시작했다.
+    RepoStarted { repo: String, index: usize, total: usize },
+    /// 파일을 읽고 파싱하는 중이다. 몇 개까지 처리했는지 알린다.
+    Scanning { repo: String, files: usize },
+    /// 훑기가 끝나고 참조를 잇는 중이다.
+    Resolving,
+    /// git 이력을 읽는 중이다.
+    History,
+    /// 데이터베이스에 쓰는 중이다.
+    Saving,
+}
+
+/// 진행 상황을 받을 함수. 인덱싱 중에 여러 번 불린다.
+/// 필요 없으면 `&mut |_| {}`를 넘긴다.
+pub type ProgressFn<'a> = &'a mut dyn FnMut(Progress);
+
 pub fn index_all_with_cache(
     config: &Config,
     store: &mut SqliteStore,
+    cache: Option<&mut crate::cache::ExtractCache>,
+) -> Result<IndexStats> {
+    index_all_with_progress(config, store, cache, &mut |_| {})
+}
+
+/// 진행 상황을 알려 주면서 인덱싱한다.
+pub fn index_all_with_progress(
+    config: &Config,
+    store: &mut SqliteStore,
     mut cache: Option<&mut crate::cache::ExtractCache>,
+    progress: ProgressFn,
 ) -> Result<IndexStats> {
     let excludes = build_exclude_set(&config.index.exclude)?;
     let rules = crate::rules::FrameworkRules::effective(&config.framework);
@@ -123,18 +156,27 @@ pub fn index_all_with_cache(
     let mut edges: Vec<Edge> = Vec::new();
 
     // ---- 1패스: 파일·심볼 노드 생성 ----
-    for root in &config.solution.repos {
+    let repo_total = config.solution.repos.len();
+    for (i, root) in config.solution.repos.iter().enumerate() {
         let root = root
             .canonicalize()
             .with_context(|| format!("저장소 경로를 찾을 수 없습니다: {}", root.display()))?;
         let repo = repo_name(&root);
+        progress(Progress::RepoStarted {
+            repo: repo.clone(),
+            index: i + 1,
+            total: repo_total,
+        });
         let seen = scan_repo(
             &repo, &root, config, &excludes, &rules, store, &mut stats, &mut table, &mut pending,
             &mut nodes, &mut edges, cache.as_deref_mut(),
+            &mut *progress,
         )?;
         seen_by_repo.push((repo, seen));
         stats.repos += 1;
     }
+
+    progress(Progress::Resolving);
 
     // ---- 2패스: 호출·import 해소 ----
     for file in &pending {
@@ -383,6 +425,7 @@ pub fn index_all_with_cache(
     }
 
     stats.top_unresolved = tally.top(8);
+    progress(Progress::Saving);
     stats.nodes = store.upsert_nodes(&nodes)?;
     stats.edges = store.upsert_edges(&edges)?;
 
@@ -641,6 +684,7 @@ fn scan_repo(
     nodes: &mut Vec<Node>,
     edges: &mut Vec<Edge>,
     mut cache: Option<&mut crate::cache::ExtractCache>,
+    progress: ProgressFn,
 ) -> Result<Vec<String>> {
     let mut seen_paths: Vec<String> = Vec::new();
     let (branch, head) = git_head(root);
@@ -648,6 +692,7 @@ fn scan_repo(
 
     // git 이력은 브랜치 무관·커밋 시점 갱신이다(docs/DESIGN.md 8·9절).
     if config.index.max_commits > 0 {
+        progress(Progress::History);
         let h = crate::history::index_history(repo, root, config.index.max_commits, nodes, edges)?;
         stats.commits += h.commits;
         stats.authors += h.authors;
@@ -730,6 +775,13 @@ fn scan_repo(
         table.insert_file(&rel, file_id.clone());
         seen_paths.push(rel.clone());
         stats.files_indexed += 1;
+        // 파일마다 보내면 화면이 갱신을 따라가지 못한다. 스무 개마다 한 번만 알린다.
+        if stats.files_indexed % 20 == 0 {
+            progress(Progress::Scanning {
+                repo: repo.to_string(),
+                files: stats.files_indexed,
+            });
+        }
 
         let counter = stats.by_lang.entry(language.to_string()).or_insert((0, 0));
         counter.0 += 1;

@@ -8,7 +8,7 @@ use serde::Serialize;
 use state::Overview;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 /// 지금 열려 있는 솔루션의 설정 파일 경로.
 ///
@@ -16,6 +16,10 @@ use tauri::Manager;
 /// 기대지 않는다. 무엇을 열었는지 앱이 들고 있다가 각 커맨드에 넘긴다.
 #[derive(Default)]
 struct Opened(Mutex<Option<PathBuf>>);
+
+/// 인덱싱이 도는 중인지. 겹쳐 실행하면 같은 데이터베이스를 두 곳에서 쓰게 된다.
+#[derive(Default)]
+struct Indexing(std::sync::atomic::AtomicBool);
 
 /// 앱 데이터 디렉터리. 최근 목록을 여기 둔다.
 fn app_dir(app: &tauri::AppHandle) -> PathBuf {
@@ -156,10 +160,72 @@ fn init_solution(
     Ok(view)
 }
 
+/// 인덱싱을 시작한다. 오래 걸리므로 별도 스레드에서 돌리고 끝나면 알린다.
+///
+/// 진행 상황은 `index-progress` 이벤트로, 결과는 `index-done` 이벤트로 보낸다.
+/// 화면을 멈추지 않으려면 이 방식이 필요하다.
+#[tauri::command]
+fn start_index(app: tauri::AppHandle, rebuild: bool) -> Result<(), String> {
+    let Some(config_path) = current(&app) else {
+        return Err("먼저 솔루션을 여십시오.".into());
+    };
+    // 이미 돌고 있으면 겹쳐 실행하지 않는다.
+    let running = app.state::<Indexing>();
+    if running.0.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return Err("이미 인덱싱 중입니다.".into());
+    }
+
+    std::thread::spawn(move || {
+        let result = run_index(&app, &config_path, rebuild);
+        app.state::<Indexing>()
+            .0
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        let payload = match result {
+            Ok(stats) => serde_json::json!({ "ok": true, "stats": stats }),
+            Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }),
+        };
+        let _ = app.emit("index-done", payload);
+    });
+    Ok(())
+}
+
+fn run_index(
+    app: &tauri::AppHandle,
+    config_path: &Path,
+    rebuild: bool,
+) -> anyhow::Result<nunchi_core::index::IndexStats> {
+    let config = nunchi_core::config::Config::load(config_path)?;
+    let dir = config_path.parent().unwrap_or(Path::new("."));
+    let db_path = dir.join(".nunchi").join("graph.db");
+    let cache_path = db_path.with_file_name("extract-cache.db");
+
+    if rebuild {
+        // 스키마 버전이 바뀌면 open 이 먼저 실패하므로 파일부터 지운다.
+        for suffix in ["", "-wal", "-shm"] {
+            let p = PathBuf::from(format!("{}{suffix}", db_path.display()));
+            let _ = std::fs::remove_file(p);
+        }
+    }
+
+    let mut store = nunchi_core::store::sqlite::SqliteStore::open(&db_path)?;
+    let mut cache = nunchi_core::cache::ExtractCache::open(&cache_path)?;
+    let handle = app.clone();
+    let stats = nunchi_core::index::index_all_with_progress(
+        &config,
+        &mut store,
+        Some(&mut cache),
+        &mut |p| {
+            let _ = handle.emit("index-progress", &p);
+        },
+    )?;
+    Ok(stats)
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(Opened::default())
+        .manage(Indexing::default())
         .invoke_handler(tauri::generate_handler![
             startup,
             open_solution,
@@ -169,7 +235,8 @@ fn main() {
             pick_folder,
             open_folder,
             detect_languages,
-            init_solution
+            init_solution,
+            start_index
         ])
         .run(tauri::generate_context!())
         .expect("창을 띄우지 못했습니다");

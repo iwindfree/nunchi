@@ -27,7 +27,7 @@ pub struct SymbolTable {
 /// 랭킹에서 확실한 엣지에 밀린다.
 pub const DEFAULT_MAX_CANDIDATES: usize = 3;
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub struct ResolveStats {
     pub total: usize,
     /// 후보가 정확히 하나 — 신뢰할 수 있다
