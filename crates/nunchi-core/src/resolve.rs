@@ -21,7 +21,11 @@ pub struct SymbolTable {
 
 /// 후보가 이보다 많으면 해소를 포기한다. `get`·`build` 같은 흔한 이름이
 /// 그래프를 오염시키는 것을 막는다.
-const MAX_CANDIDATES: usize = 3;
+///
+/// `nunchi.shared.toml`의 `index.max_candidates`로 조정한다. 재현율이
+/// 아쉬우면 올려 본다. 애매한 엣지는 신뢰도가 후보 수만큼 나뉘어 붙으므로
+/// 랭킹에서 확실한 엣지에 밀린다.
+pub const DEFAULT_MAX_CANDIDATES: usize = 3;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct ResolveStats {
@@ -147,6 +151,7 @@ impl SymbolTable {
     pub fn resolve_call(
         &self,
         callee: &str,
+        max_candidates: usize,
         stats: &mut ResolveStats,
         tally: &mut UnresolvedTally,
     ) -> Vec<(NodeId, f32)> {
@@ -163,7 +168,7 @@ impl SymbolTable {
                 // 이름 일치일 뿐 타입 해소가 아니므로 1.0을 주지 않는다.
                 vec![(candidates[0].clone(), 0.8)]
             }
-            n if n <= MAX_CANDIDATES => {
+            n if n <= max_candidates => {
                 stats.ambiguous += 1;
                 let confidence = 0.8 / n as f32;
                 candidates.iter().cloned().map(|id| (id, confidence)).collect()
@@ -255,7 +260,7 @@ mod tests {
         let mut table = SymbolTable::default();
         table.insert_symbol("findOne", NodeId("sym:api/A.java#findOne".into()), "method");
         let mut stats = ResolveStats::default();
-        let hits = table.resolve_call("findOne", &mut stats, &mut UnresolvedTally::default());
+        let hits = table.resolve_call("findOne", DEFAULT_MAX_CANDIDATES, &mut stats, &mut UnresolvedTally::default());
         assert_eq!(hits.len(), 1);
         assert_eq!(stats.resolved, 1);
         assert_eq!(stats.rate(), 1.0);
@@ -265,7 +270,7 @@ mod tests {
     fn unknown_names_count_as_unresolved() {
         let table = SymbolTable::default();
         let mut stats = ResolveStats::default();
-        assert!(table.resolve_call("println", &mut stats, &mut UnresolvedTally::default()).is_empty());
+        assert!(table.resolve_call("println", DEFAULT_MAX_CANDIDATES, &mut stats, &mut UnresolvedTally::default()).is_empty());
         assert_eq!(stats.unresolved, 1);
         assert_eq!(stats.rate(), 0.0);
     }
@@ -277,7 +282,7 @@ mod tests {
             table.insert_symbol("get", NodeId(format!("sym:{i}")), "method");
         }
         let mut stats = ResolveStats::default();
-        assert!(table.resolve_call("get", &mut stats, &mut UnresolvedTally::default()).is_empty());
+        assert!(table.resolve_call("get", DEFAULT_MAX_CANDIDATES, &mut stats, &mut UnresolvedTally::default()).is_empty());
         assert_eq!(stats.dropped, 1);
     }
 

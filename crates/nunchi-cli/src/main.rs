@@ -380,11 +380,15 @@ fn cmd_doctor(config_arg: Option<PathBuf>, json: bool) -> Result<()> {
 
     let api = get("api_calls");
     let linked = get("api_calls_linked");
+    let late = get("api_calls_resolved_late");
     if api > 0 {
         let pct = linked as f64 / api as f64 * 100.0;
         let mark = if pct >= 70.0 { "✓" } else if pct >= 40.0 { "⚠" } else { "✗" };
         println!("\n교차 저장소 계약 (CALLS_API)  {mark}");
         println!("  API 호출 {api} — 라우트에 연결 {linked} ({pct:.0}%)");
+        if late > 0 {
+            println!("  그중 {late}건은 다른 파일의 상수를 참조합니다");
+        }
         let dynamic = get("api_calls_dynamic");
         if dynamic > 0 {
             println!("  동적 경로 {dynamic}건 제외 — 런타임에 조립되어 정적 분석 불가");

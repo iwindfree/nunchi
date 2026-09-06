@@ -481,6 +481,43 @@ if syntax.concat.iter().any(|k| k == node.kind()) {
 리터럴을 하나도 만나지 못하면 버립니다. `getForObject(url, ...)`처럼 변수만
 넘긴 경우인데, 어떤 경로인지 알 수 없으면서 좌표를 주는 것보다 낫습니다.
 
+### 다른 파일의 상수는 2패스에서 채웁니다
+
+경로 상수를 한곳에 모아 두는 관례가 흔합니다.
+
+```java
+// ApiPaths.java
+public static final String ORDERS = "/api/orders";
+
+// OrderGateway.java
+rest.getForObject(ApiPaths.ORDERS, List.class);
+```
+
+이 장의 코드는 파일 하나만 봅니다. 다른 파일의 선언을 알 수 없으므로 값을
+지우는 대신 **이름을 남깁니다.**
+
+```rust
+if is_plain_name(raw) {
+    out.push_str("${");
+    out.push_str(raw);
+    out.push('}');
+    *saw_literal = true;
+}
+```
+
+그러면 경로가 `${ApiPaths.ORDERS}` 형태로 저장되고, [7장](07-resolve.md)에서
+본 인덱싱 2패스가 전체 파일의 상수를 합쳐 그 자리를 채웁니다. 참조를 해소할
+때 두 번 도는 이유와 같습니다. 다른 파일을 봐야 알 수 있는 것은 모든 파일을
+읽은 다음에야 처리할 수 있습니다.
+
+`*saw_literal = true`가 중요합니다. 이름도 값의 근거로 세지 않으면
+`getForObject(ApiPaths.ORDERS, ...)`처럼 이름만 있는 호출이 1패스에서 통째로
+버려집니다. 실제로 그렇게 만들었다가 고쳤습니다.
+
+같은 이름이 여러 파일에 다른 값으로 있으면 값을 확정하지 않습니다. `BASE`나
+`API_URL`은 흔해서 충돌하기 쉽습니다. 대신 `ApiPaths.ORDERS`처럼 클래스
+이름을 붙인 키도 함께 넣어 두므로, 한정해서 참조하면 정확히 해소됩니다.
+
 실측하면 전형적인 아홉 가지 형태 중 여섯 가지를 읽습니다. 남은 셋은
 설정에서 주입받는 값과 빌더 체이닝, 함수 반환값이며 정적으로는 알 수
 없습니다.

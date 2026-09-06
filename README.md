@@ -111,13 +111,19 @@ API를 부르므로 네 언어에서 모두 탐지합니다. 서비스 사이의
 `calls_api` 관계로 이어집니다.
 
 URL이 리터럴이 아니어도 상당 부분 읽습니다. 문자열을 이어 붙인 경로,
-같은 파일에 선언된 상수와 지역 변수, `String.format`의 형식 문자열을
-따라갑니다.
+상수와 지역 변수, `String.format`의 형식 문자열을 따라갑니다. 경로 상수를
+별도 파일에 모아 두는 관례도 지원합니다.
 
 ```java
-private static final String BASE = "/api/orders";
-rest.getForObject(BASE + "/" + id, OrderDto.class);   // /api/orders/{}
+// ApiPaths.java
+public static final String ORDERS = "/api/orders";
+
+// OrderGateway.java
+rest.getForObject(ApiPaths.ORDERS + "/" + id, OrderDto.class);   // /api/orders/{}
 ```
+
+같은 이름이 여러 파일에 다른 값으로 있으면 값을 확정하지 않습니다.
+`ApiPaths.ORDERS`처럼 한정된 이름은 유일하므로 그대로 해소됩니다.
 
 다만 값이 코드 밖에 있으면 알 수 없습니다. `@Value("${order.api.base}")`로
 설정에서 주입받는 경로가 그렇습니다. 메서드를 이어 부르는 형태도 읽지

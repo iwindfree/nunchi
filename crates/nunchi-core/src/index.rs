@@ -45,6 +45,8 @@ pub struct IndexStats {
     pub unlinked_api_paths: Vec<String>,
     /// 정적으로 경로를 알 수 없는 호출 — 연결 실패로 세면 지표가 왜곡된다
     pub api_calls_dynamic: usize,
+    /// 다른 파일의 상수를 참조하여 2패스에서 경로를 채운 호출 수.
+    pub api_calls_resolved_late: usize,
     // ── git 이력 (Phase 3) ──
     pub commits: usize,
     pub authors: usize,
@@ -72,6 +74,19 @@ pub fn build_exclude_set(patterns: &[String]) -> Result<GlobSet> {
 }
 
 /// 1패스에서 모아두는 파일별 중간 결과.
+/// 2패스에서 라우트에 연결할 API 호출 자리.
+///
+/// `raw_path`를 함께 들고 다니는 이유가 있다. 1패스에서 값을 못 찾은 이름이
+/// `${ApiPaths.ORDERS}` 형태로 남아 있고, 2패스에서 다른 파일의 상수 표로
+/// 그것을 채운 뒤 경로를 다시 정규화한다.
+struct ApiCallSite {
+    id: NodeId,
+    method: String,
+    path: String,
+    raw_path: String,
+    dynamic: bool,
+}
+
 struct PendingFile {
     repo: String,
     rel: String,
@@ -82,7 +97,7 @@ struct PendingFile {
     symbol_spans: Vec<(Span, NodeId)>,
     fw: FrameworkFacts,
     /// 이 파일에서 만든 ApiCall 노드들 — 2패스에서 라우트에 연결한다
-    api_call_ids: Vec<(NodeId, String, String, bool)>,
+    api_call_ids: Vec<ApiCallSite>,
 }
 
 pub fn index_all(config: &Config, store: &mut SqliteStore) -> Result<IndexStats> {
@@ -124,7 +139,12 @@ pub fn index_all_with_cache(
         for call in &file.facts.calls {
             let src = enclosing_symbol(&file.symbol_spans, call.line)
                 .unwrap_or_else(|| file.file_id.clone());
-            for (dst, confidence) in table.resolve_call(&call.callee, &mut stats.calls, &mut tally) {
+            for (dst, confidence) in table.resolve_call(
+                &call.callee,
+                config.index.max_candidates,
+                &mut stats.calls,
+                &mut tally,
+            ) {
                 if dst == src {
                     continue; // 자기 호출은 그래프에 도움이 안 된다
                 }
@@ -167,6 +187,66 @@ pub fn index_all_with_cache(
         }
     }
 
+    // ── 다른 파일에 선언된 상수로 URL을 마저 해소한다 ──────────────────
+    // 경로 상수를 `ApiPaths` 같은 클래스에 모아 두는 관례가 흔하다. 1패스는
+    // 파일 하나만 보므로 그런 이름을 `${ApiPaths.ORDERS}` 형태로 남겨 둔다.
+    // 여기서 전체 파일의 상수를 합쳐 그것을 채운다.
+    let mut constants: HashMap<String, String> = HashMap::new();
+    let mut updated: HashMap<NodeId, (String, String)> = HashMap::new();
+    for file in &pending {
+        for (name, value) in &file.fw.string_constants {
+            // 같은 이름이 여러 파일에 있으면 값을 확정할 수 없다. 잘못된 좌표를
+            // 주는 것보다 모른다고 두는 편이 낫다.
+            match constants.entry(name.clone()) {
+                std::collections::hash_map::Entry::Occupied(mut e) => {
+                    if e.get() != value {
+                        e.insert(String::new());
+                    }
+                }
+                std::collections::hash_map::Entry::Vacant(e) => {
+                    e.insert(value.clone());
+                }
+            }
+        }
+    }
+    for file in &mut pending {
+        for site in &mut file.api_call_ids {
+            if !framework::has_unresolved_name(&site.raw_path) {
+                continue;
+            }
+            let was_dynamic = site.dynamic;
+            let filled = framework::fill_constants(&site.raw_path, &constants)
+                .unwrap_or_else(|| site.raw_path.clone());
+            // 채우고도 경로처럼 보이지 않으면 어떤 엔드포인트인지 알 수 없다.
+            // 노드는 남기되 라우트 연결에서 빼서 연결 실패로 세지 않는다.
+            if !filled.starts_with('/') && !filled.contains("/api") {
+                site.dynamic = true;
+                continue;
+            }
+            site.path = framework::normalize_route_path(&filled);
+            site.dynamic = framework::has_dynamic_segment(&filled);
+            site.raw_path = filled;
+            stats.api_calls_resolved_late += 1;
+            // 1패스는 이름이 남아 있는 경로를 동적으로 셌다. 값을 채워
+            // 경로가 확정되었으므로 집계를 옮긴다.
+            if was_dynamic && !site.dynamic {
+                stats.api_calls_dynamic = stats.api_calls_dynamic.saturating_sub(1);
+                stats.api_calls += 1;
+            }
+            // 노드는 1패스에서 이미 만들어졌으므로 표시도 함께 고친다.
+            // 그러지 않으면 TUI와 팩에 미해결 상태의 경로가 남는다.
+            updated.insert(site.id.clone(), (site.method.clone(), site.path.clone()));
+        }
+    }
+    if !updated.is_empty() {
+        for node in nodes.iter_mut() {
+            if let Some((method, path)) = updated.get(&node.id) {
+                node.name = format!("{method} {path}");
+                node.signature = Some(node.name.clone());
+            }
+        }
+    }
+
     // ── 교차 저장소 계약 엣지 — v1의 하이라이트 (docs/DESIGN.md 4·5절) ──
     // 라우트는 솔루션 전체에서 유일하므로 저장소가 달라도 매칭된다.
     let mut route_index: HashMap<(String, String), NodeId> = HashMap::new();
@@ -180,8 +260,9 @@ pub fn index_all_with_cache(
     }
 
     for file in &pending {
-        for (call_id, method, path, dynamic) in &file.api_call_ids {
-            if *dynamic {
+        for site in &file.api_call_ids {
+            let (call_id, method, path, dynamic) = (&site.id, &site.method, &site.path, site.dynamic);
+            if dynamic {
                 continue; // 경로를 정적으로 알 수 없다 — 연결 실패가 아니다
             }
             // 정확히 일치하는 라우트 우선, 없으면 메서드 무관(@RequestMapping) 라우트.
@@ -400,7 +481,7 @@ fn extract_framework(
     nodes: &mut Vec<Node>,
     edges: &mut Vec<Edge>,
     stats: &mut IndexStats,
-) -> (FrameworkFacts, Vec<(NodeId, String, String, bool)>) {
+) -> (FrameworkFacts, Vec<ApiCallSite>) {
     let mut parser = tree_sitter::Parser::new();
     let Ok(()) = parser.set_language(&sl.language_for(abs)) else {
         return (FrameworkFacts::default(), Vec::new());
@@ -413,6 +494,9 @@ fn extract_framework(
 
     let mut fw = framework::extract_annotated(root, bytes, language, rules);
     fw.api_calls = framework::extract_api_calls(root, bytes, language, rules);
+    if let Some(syntax) = rules.lang_syntax(language) {
+        fw.string_constants = framework::string_constants(root, bytes, syntax);
+    }
 
     for route in &fw.routes {
         let id = route_id(&route.method, &route.path);
@@ -477,7 +561,13 @@ fn extract_framework(
             EdgeKind::Contains,
             Provenance::Fast,
         ));
-        api_call_ids.push((id, call.method.clone(), call.path.clone(), call.dynamic));
+        api_call_ids.push(ApiCallSite {
+            id,
+            method: call.method.clone(),
+            path: call.path.clone(),
+            raw_path: call.raw_path.clone(),
+            dynamic: call.dynamic,
+        });
         if call.dynamic {
             stats.api_calls_dynamic += 1;
         } else {
@@ -772,6 +862,7 @@ fn persist_metrics(store: &mut SqliteStore, stats: &IndexStats) -> Result<()> {
         "api_calls": stats.api_calls,
         "api_calls_dynamic": stats.api_calls_dynamic,
         "api_calls_linked": stats.api_calls_linked,
+        "api_calls_resolved_late": stats.api_calls_resolved_late,
         "unlinked_api_paths": stats.unlinked_api_paths,
         "injects_resolved": stats.injects_resolved,
         "injects_unresolved": stats.injects_unresolved,

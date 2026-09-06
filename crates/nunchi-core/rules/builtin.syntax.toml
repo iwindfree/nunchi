@@ -55,6 +55,7 @@ lambda = [
     "function_declaration",
 ]
 concat = ["binary_expression"]
+qualified_name = ["member_expression"]
 declaration = ["variable_declarator"]
 declaration_name_field = "name"
 declaration_value_field = "value"
@@ -74,6 +75,7 @@ lambda = [
     "function_declaration",
 ]
 concat = ["binary_expression"]
+qualified_name = ["member_expression"]
 declaration = ["variable_declarator"]
 declaration_name_field = "name"
 declaration_value_field = "value"
@@ -90,6 +92,7 @@ method_field = "attribute"
 string = ["string", "concatenated_string"]
 lambda = ["lambda"]
 concat = ["binary_operator"]
+qualified_name = ["attribute"]
 declaration = ["assignment"]
 declaration_name_field = "left"
 declaration_value_field = "right"
@@ -107,6 +110,7 @@ method_field = "name"
 string = ["string_literal"]
 lambda = ["lambda_expression"]
 concat = ["binary_expression"]
+qualified_name = ["field_access"]
 declaration = ["variable_declarator"]
 declaration_name_field = "name"
 declaration_value_field = "value"
@@ -130,6 +134,7 @@ string = [
 lambda = ["lambda_expression", "anonymous_method_expression"]
 arg_wrapper = "argument"
 concat = ["binary_expression"]
+qualified_name = ["member_access_expression"]
 declaration = ["variable_declarator"]
 declaration_name_field = "name"
 declaration_value_field = "value"

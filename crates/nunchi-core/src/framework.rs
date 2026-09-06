@@ -17,6 +17,9 @@ pub struct FrameworkFacts {
     pub beans: Vec<BeanFact>,
     pub injects: Vec<InjectFact>,
     pub api_calls: Vec<ApiCallFact>,
+    /// 이 파일에 선언된 이름과 문자열 값. 다른 파일이 참조할 수 있으므로
+    /// 인덱싱 2패스에서 합쳐 미해결 URL을 다시 해소한다.
+    pub string_constants: std::collections::HashMap<String, String>,
     pub entities: Vec<EntityFact>,
     /// (소유 심볼, 테이블명) — SQL 어노테이션·매퍼에서 추출
     pub table_refs: Vec<TableRefFact>,
@@ -750,7 +753,10 @@ fn api_call_of(
 
     let raw = url_argument_at(args, src, url_arg, syntax, constants)?;
     // 도메인 경로처럼 보이지 않으면 버린다. `useState("")` 같은 오탐 방지.
-    if !raw.starts_with('/') && !raw.contains("/api") {
+    //
+    // 다만 아직 값을 못 찾은 이름이 남아 있으면 여기서 판단할 수 없다.
+    // 다른 파일에 선언된 상수일 수 있으므로 2패스로 미룬다.
+    if !has_unresolved_name(&raw) && !raw.starts_with('/') && !raw.contains("/api") {
         return None;
     }
 
@@ -820,6 +826,23 @@ fn literal_url(
     saw_literal.then_some(url)
 }
 
+/// 이 선언을 감싸는 타입의 이름. `ApiPaths.ORDERS` 형태의 키를 만드는 데 쓴다.
+fn enclosing_type_name(node: Node, src: &[u8]) -> Option<String> {
+    let mut cur = node.parent();
+    while let Some(n) = cur {
+        if n.kind().contains("class_declaration")
+            || n.kind().contains("interface_declaration")
+            || n.kind().contains("object_declaration")
+        {
+            if let Some(name) = n.child_by_field_name("name") {
+                return Some(text(name, src).to_string());
+            }
+        }
+        cur = n.parent();
+    }
+    None
+}
+
 /// 파일 안에서 이름에 묶인 문자열 값을 모은다.
 ///
 /// Java 백엔드는 경로를 `private static final String BASE = "/api/orders"`처럼
@@ -828,7 +851,7 @@ fn literal_url(
 ///
 /// 같은 파일 안에서만 찾는다. 이름은 짧고 흔해서(`BASE`, `API_URL`) 파일을
 /// 넘나들며 치환하면 다른 파일의 값을 잘못 가져올 수 있다.
-fn string_constants(
+pub fn string_constants(
     root: Node,
     src: &[u8],
     syntax: &crate::rules::LangSyntax,
@@ -857,9 +880,15 @@ fn collect_declarations(
             if saw_literal {
                 // 같은 이름이 여러 번 선언되면 첫 번째를 쓴다. 재대입까지
                 // 추적하려면 흐름 분석이 필요하고, 그만한 이득이 없다.
-                table
-                    .entry(text(name, src).to_string())
-                    .or_insert(text_out);
+                let name = text(name, src).to_string();
+                // `ApiPaths.ORDERS`로 참조할 수 있도록 클래스 이름을 붙인 키도
+                // 함께 넣는다. 짧은 이름은 겹칠 수 있으나 한정 이름은 유일하다.
+                if let Some(owner) = enclosing_type_name(node, src) {
+                    table
+                        .entry(format!("{owner}.{name}"))
+                        .or_insert_with(|| text_out.clone());
+                }
+                table.entry(name).or_insert(text_out);
             }
         }
     }
@@ -939,8 +968,80 @@ fn collect_url_parts_with(
             return;
         }
     }
-    // 변수나 함수 호출 — 무엇이 들어올지 알 수 없다.
-    out.push_str("${}");
+    // 여기까지 왔으면 이 파일에서는 값을 알 수 없다. 이름을 그대로 남겨 두면
+    // 인덱싱 2패스가 다른 파일의 상수 표에서 다시 찾아본다. 상수를 별도
+    // 파일에 모아 두는 관례가 흔하기 때문이다.
+    // 이름이 아닌 것(함수 호출 등)은 빈 표시만 남긴다.
+    let raw = text(node, src);
+    if is_plain_name(raw) {
+        out.push_str("${");
+        out.push_str(raw);
+        out.push('}');
+        // 이름도 값의 근거다. 2패스에서 채워질 수 있으므로 리터럴과 같이 센다.
+        // 그러지 않으면 `getForObject(ApiPaths.ORDERS, ...)`처럼 이름만 있는
+        // 호출이 1패스에서 통째로 버려진다.
+        *saw_literal = true;
+    } else {
+        out.push_str("${}");
+    }
+}
+
+/// 식별자나 `A.B` 형태의 한정 이름인지. 공백이나 괄호가 있으면 식이다.
+fn is_plain_name(raw: &str) -> bool {
+    !raw.is_empty()
+        && raw
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == '.' || c == '$')
+}
+
+/// 아직 값을 찾지 못한 이름이 남아 있는가. `${}`는 알 수 없다는 표시이므로
+/// 세지 않고, `${ApiPaths.ORDERS}`처럼 이름이 든 것만 센다.
+pub fn has_unresolved_name(raw: &str) -> bool {
+    let mut rest = raw;
+    while let Some(start) = rest.find("${") {
+        let after = &rest[start + 2..];
+        if !after.starts_with('}') {
+            return true;
+        }
+        rest = after;
+    }
+    false
+}
+
+/// 경로에 남은 `${이름}` 자리를 상수 표의 값으로 채운다.
+///
+/// 1패스는 파일 하나만 보므로 다른 파일에 선언된 상수를 알 수 없다. 그런
+/// 이름을 지우지 않고 남겨 두었다가 인덱싱 2패스에서 이 함수로 채운다.
+/// 채운 것이 하나도 없으면 `None`을 돌려주어 호출한 쪽이 건너뛰게 한다.
+pub fn fill_constants(
+    raw: &str,
+    constants: &std::collections::HashMap<String, String>,
+) -> Option<String> {
+    if !raw.contains("${") {
+        return None;
+    }
+    let mut out = String::with_capacity(raw.len());
+    let mut rest = raw;
+    let mut filled = false;
+    while let Some(start) = rest.find("${") {
+        let Some(end) = rest[start..].find('}') else { break };
+        let name = &rest[start + 2..start + end];
+        out.push_str(&rest[..start]);
+        match constants.get(name) {
+            // 빈 문자열은 "이름이 겹쳐 값을 확정할 수 없다"는 표시다.
+            Some(value) if !value.is_empty() => {
+                out.push_str(value);
+                filled = true;
+            }
+            _ => {
+                // 못 찾은 이름은 알 수 없는 값으로 남긴다.
+                out.push_str("${}");
+            }
+        }
+        rest = &rest[start + end + 1..];
+    }
+    out.push_str(rest);
+    filled.then_some(out)
 }
 
 /// 형식 문자열의 자리 표시자를 `${}`로 바꾼다.
@@ -1414,15 +1515,31 @@ class Gateway {
     }
 
     #[test]
-    fn constants_do_not_leak_across_files() {
-        // 상수 이름은 짧고 흔하다. 파일을 넘나들며 치환하면 다른 파일의 값을
-        // 가져올 수 있으므로 같은 파일 안에서만 찾는다.
+    fn an_unknown_name_is_left_for_the_second_pass() {
+        // 이 파일에 선언이 없는 이름은 값을 지우지 않고 `${이름}`으로 남긴다.
+        // 경로 상수를 별도 파일에 모아 두는 관례가 흔해서, 인덱싱 2패스가
+        // 전체 파일의 상수 표로 그것을 채운다.
         let calls = calls_in(
             "java",
             tree_sitter_java::LANGUAGE.into(),
-            r#"class C { void m() { rest.getForObject(BASE, List.class); } }"#,
+            r#"class C { void m() { rest.getForObject(ApiPaths.ORDERS, List.class); } }"#,
         );
-        assert!(calls.is_empty(), "선언이 없는 이름을 치환했다: {calls:?}");
+        assert_eq!(calls.len(), 1, "{calls:?}");
+        assert_eq!(
+            calls[0].raw_path, "${ApiPaths.ORDERS}",
+            "이름을 잃으면 2패스에서 찾을 수 없다"
+        );
+    }
+
+    #[test]
+    fn a_name_that_is_never_declared_stays_unresolved() {
+        // 끝까지 선언을 못 찾으면 값을 알 수 없다. 인덱싱 2패스가 이런 호출을
+        // dynamic 으로 표시해 라우트 연결에서 뺀다.
+        let table = std::collections::HashMap::new();
+        assert!(
+            fill_constants("${NOWHERE}/items", &table).is_none(),
+            "채운 것이 없으면 None 이어야 한다"
+        );
     }
 
     #[test]

@@ -40,10 +40,22 @@ pub struct IndexConfig {
     /// git 이력을 몇 커밋까지 읽을지. 0이면 이력 인덱싱을 건너뛴다.
     #[serde(default = "default_max_commits")]
     pub max_commits: usize,
+    /// 이름이 같은 심볼이 이보다 많으면 호출 해소를 포기한다.
+    ///
+    /// tree-sitter는 타입을 모르므로 이름이 같은 후보를 전부 내놓는다.
+    /// 값을 올리면 애매한 엣지가 늘어나는 대신 놓치는 호출이 줄어든다.
+    /// 애매한 엣지는 신뢰도가 후보 수만큼 나뉘어 붙으므로 랭킹에서 확실한
+    /// 엣지에 밀린다. 재현율이 아쉬우면 먼저 올려 볼 값이다.
+    #[serde(default = "default_max_candidates")]
+    pub max_candidates: usize,
 }
 
 fn default_max_commits() -> usize {
     1000
+}
+
+fn default_max_candidates() -> usize {
+    3
 }
 
 impl Default for IndexConfig {
@@ -53,6 +65,7 @@ impl Default for IndexConfig {
             exclude: DEFAULT_EXCLUDES.iter().map(|s| s.to_string()).collect(),
             max_file_bytes: 2 * 1024 * 1024,
             max_commits: default_max_commits(),
+            max_candidates: default_max_candidates(),
         }
     }
 }
@@ -127,6 +140,8 @@ pub struct SharedIndex {
     pub exclude: Option<Vec<String>>,
     #[serde(default)]
     pub max_commits: Option<usize>,
+    #[serde(default)]
+    pub max_candidates: Option<usize>,
 }
 
 impl Config {
@@ -160,6 +175,9 @@ impl Config {
             if let Some(v) = i.max_commits {
                 self.index.max_commits = v;
             }
+            if let Some(v) = i.max_candidates {
+                self.index.max_candidates = v;
+            }
         }
         if let Some(v) = shared.rank {
             self.rank = v;
@@ -179,6 +197,7 @@ impl Config {
                 languages: Some(self.index.languages.clone()),
                 exclude: Some(self.index.exclude.clone()),
                 max_commits: Some(self.index.max_commits),
+                max_candidates: Some(self.index.max_candidates),
             }),
             rank: Some(self.rank),
             framework: Some(self.framework.clone()),

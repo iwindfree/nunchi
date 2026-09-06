@@ -71,6 +71,10 @@ pub struct LangSyntax {
     /// 문자열을 이어 붙이는 식의 노드 이름. `"/api/x/" + id` 형태를 읽는다.
     #[serde(default)]
     pub concat: Vec<String>,
+    /// `ApiPaths.ORDERS`처럼 한정된 이름의 노드. 상수를 별도 파일에 모아 두는
+    /// 관례가 흔해서, 이 형태도 이름으로 읽어야 값을 찾을 수 있다.
+    #[serde(default)]
+    pub qualified_name: Vec<String>,
     /// 이름에 값을 묶는 선언 노드 이름. 상수 URL을 따라가는 데 쓴다.
     #[serde(default)]
     pub declaration: Vec<String>,
