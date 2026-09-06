@@ -312,3 +312,152 @@ label.field span { display: block; color: var(--muted); margin-bottom: 5px; }
 }
 
 .actions { display: flex; gap: 8px; margin-top: 18px; }
+
+/* ── 탐색 결과 ───────────────────────────────────────── */
+.hits { margin: 0; padding: 0; list-style: none; }
+
+.hit {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--bg);
+  padding: 8px 11px;
+  margin-bottom: 6px;
+}
+
+.hit[data-pick] { cursor: pointer; }
+.hit[data-pick]:hover { border-color: var(--accent); }
+.hit.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--bg)); }
+
+.hit-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+
+.kind {
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0 5px;
+}
+
+.score { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+.sig {
+  color: var(--muted);
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  font-size: 12px;
+  margin-top: 3px;
+  word-break: break-all;
+}
+
+.ref { margin-top: 3px; }
+.ref code { color: var(--accent); }
+
+/* ── 팩 ──────────────────────────────────────────────── */
+.sliders {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 14px;
+}
+
+.slider-head { display: flex; justify-content: space-between; align-items: baseline; }
+.slider-head .val { font-variant-numeric: tabular-nums; color: var(--muted); }
+.slider .note { margin-top: 2px; }
+
+input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+  margin: 6px 0 0;
+}
+
+.bar {
+  height: 7px;
+  border-radius: 4px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.bar span { display: block; height: 100%; background: var(--accent); }
+
+.tier {
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 4px;
+  padding: 1px 5px;
+  border: 1px solid var(--line);
+}
+
+.tL2 { color: var(--accent); border-color: var(--accent); }
+.tL1 { color: var(--warn); border-color: var(--warn); }
+.tL0 { color: var(--muted); }
+
+.hint {
+  white-space: pre-wrap;
+  margin: 0;
+  font: inherit;
+  color: var(--muted);
+}
+
+.ok-box {
+  border: 1px solid var(--ok);
+  border-radius: 7px;
+  padding: 10px 12px;
+  color: var(--ok);
+  margin-bottom: 14px;
+  background: color-mix(in srgb, var(--ok) 8%, transparent);
+}
+
+/* ── 설정 ────────────────────────────────────────────── */
+.tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.tab {
+  appearance: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  padding: 7px 12px;
+  cursor: pointer;
+}
+
+.tab:hover { color: var(--fg); }
+.tab.on { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+
+.grid3 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0 14px;
+}
+
+textarea, select, input[type="number"] {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  padding: 7px 10px;
+  border-radius: 7px;
+  width: 100%;
+}
+
+textarea:focus, select:focus, input[type="number"]:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+select { width: auto; }
+
+textarea.raw {
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.55;
+  resize: vertical;
+  white-space: pre;
+  tab-size: 2;
+}
+
+.syn input { flex: 1; }

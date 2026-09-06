@@ -110,7 +110,7 @@ pub fn index_all(config: &Config, store: &mut SqliteStore) -> Result<IndexStats>
 /// 인덱싱이 어디까지 왔는지 알린다.
 ///
 /// 저장소가 크면 수십 초가 걸리므로 화면이 멈춘 것처럼 보인다. 데스크톱 앱이
-/// 이것을 받아 진행 상황을 그린다. CLI와 MCP 서버는 `None`을 넘기면 된다.
+/// 이것을 받아 진행 상황을 그린다. 필요 없는 쪽은 빈 클로저를 넘긴다.
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(tag = "stage", rename_all = "snake_case")]
 pub enum Progress {
