@@ -434,69 +434,72 @@ pub fn has_dynamic_segment(raw: &str) -> bool {
 
 ### 리터럴이 아닌 URL을 읽습니다
 
-경로가 문자열 리터럴로 그대로 적혀 있는 경우는 많지 않습니다. Java 백엔드는
-특히 상수로 빼는 관례가 강합니다.
+경로가 문자열 리터럴로 그대로 적혀 있는 경우는 많지 않습니다. 상수를 이어
+붙이거나 변수를 끼워 넣습니다.
 
 ```java
 private static final String BASE = "/api/orders";
 rest.getForObject(BASE + "/" + id, OrderDto.class);
 ```
 
-선언을 따라가지 않으면 호출 자리에 `BASE`라는 이름만 남아 경로를 알 수
-없습니다. 그래서 파일을 한 번 훑어 이름에 묶인 문자열을 표로 모아 둡니다.
+이 한 줄에 세 가지가 섞여 있습니다. 값을 아는 이름(`BASE`), 리터럴(`"/"`),
+값을 모르는 변수(`id`)입니다. **이 구조를 문자열 하나로 뭉치지 않고 조각인
+채로 들고 다니는 것**이 이 절의 핵심입니다.
 
 ```rust
-fn string_constants(
-    root: Node,
-    src: &[u8],
-    syntax: &crate::rules::LangSyntax,
-) -> std::collections::HashMap<String, String>
+{{#include ../../../crates/nunchi-core/src/framework.rs:url_part}}
 ```
 
-**같은 파일 안에서만 찾는 것이 중요합니다.** `BASE`나 `API_URL` 같은 이름은
-짧고 흔해서, 파일을 넘나들며 치환하면 다른 파일의 값을 잘못 가져옵니다.
-
-연결식은 재귀로 내려갑니다.
+`Named`가 왜 필요한지는 뒤에서 설명합니다. 위 코드는 이렇게 됩니다.
 
 ```rust
-if syntax.concat.iter().any(|k| k == node.kind()) {
-    if let (Some(left), Some(right)) = (
-        node.child_by_field_name("left"),
-        node.child_by_field_name("right"),
-    ) {
-        collect_url_parts_with(left, src, syntax, constants, out, saw_literal);
-        collect_url_parts_with(right, src, syntax, constants, out, saw_literal);
-        return;
-    }
-}
+[Literal("/api/orders"), Literal("/"), Unknown]
 ```
 
-`"/api/articles/" + slug + "/comments"`가 트리에서 왼쪽으로 중첩되기
-때문입니다. 처음에는 왼쪽을 한 겹만 봤는데, 그러면 최상위의 왼쪽이 또
-연결식이라 리터럴을 찾지 못하고 **호출을 통째로 놓쳤습니다.**
+### 조각으로 두면 판단이 짧아집니다
 
-변수 자리에는 `${}`를 남깁니다. **이것은 조립하는 동안만 쓰는 중간
-표시이며 저장되지 않습니다.** 곧바로 `normalize_route_path`를 거쳐 `{}`가
-되고, 그 값이 라우트와 비교됩니다.
+경로를 다루면서 물어야 하는 것이 네 가지입니다. 조각이 남아 있으면 그 질문이
+코드에 그대로 옮겨집니다.
 
-```
-"/api/orders/" + id      코드에 적힌 것
-      ↓ collect_url_parts 가 조립
-"/api/orders/${}"        함수 안의 중간 값
-      ↓ normalize_route_path
-"/api/orders/{}"         저장되고 비교되는 값
+```rust
+{{#include ../../../crates/nunchi-core/src/framework.rs:url_template}}
 ```
 
-굳이 `${}`를 거치는 이유가 있습니다. `normalize_route_path`와
-`has_dynamic_segment`가 **`${` 표시를 찾도록 이미 만들어져 있기**
-때문입니다. 프런트엔드의 템플릿 문자열을 처리하려고 만든 것인데, Java
-연결식도 같은 표시를 남기면 두 함수를 그대로 쓸 수 있습니다.
+`is_dynamic`만 설명이 필요합니다. **값을 모르는 자리가 경로 세그먼트 하나를
+통째로 차지하면 파라미터로 봅니다.** Spring의 `/{id}`가 정규화된 결과와 같은
+문자열이 되므로 라우트에 연결할 수 있기 때문입니다.
 
-중간 표시로 `{}`를 바로 쓸 수는 없습니다. Spring의 `@GetMapping("/{id}")`가
-이미 `{id}` 형태를 쓰고 있어서 둘을 구분할 수 없어지기 때문입니다.
+```
+/api/orders/{}      ← 슬래시 사이를 통째로 차지한다. 연결 가능
+/api/orders{}       ← 세그먼트 중간에 끼어든다. 어느 경로인지 모른다
+```
 
-리터럴을 하나도 만나지 못하면 버립니다. `getForObject(url, ...)`처럼 변수만
-넘긴 경우인데, 어떤 경로인지 알 수 없으면서 좌표를 주는 것보다 낫습니다.
+`"/api/orders" + suffix`가 뒤쪽입니다. `suffix`에 무엇이 오느냐에 따라
+`/api/orders/x`도 되고 `/api/ordersx`도 됩니다.
+
+### 조각을 모으는 곳
+
+```rust
+{{#include ../../../crates/nunchi-core/src/framework.rs:collect_parts}}
+```
+
+노드 종류를 그대로 조각 종류로 옮기는 것이 전부입니다. 연결식에서 재귀로
+내려가는 부분이 중요합니다. `"/api/articles/" + slug + "/comments"`는 트리에서
+왼쪽으로 중첩되므로, 왼쪽을 한 겹만 보면 최상위의 왼쪽이 또 연결식이라
+리터럴을 찾지 못하고 **호출을 통째로 놓칩니다.** 실제로 그렇게 만들었다가
+고쳤습니다.
+
+문자열 리터럴도 그냥 넣지 않고 한 번 더 나눕니다. 리터럴이라고 전부 고정된
+것은 아니기 때문입니다.
+
+```
+`/api/orders/${id}`     자바스크립트 템플릿
+f"/api/orders/{id}"     파이썬 f-문자열
+$"/api/orders/{id}"     C# 보간
+```
+
+셋 다 문자열 노드 하나인데 안에 치환이 들어 있습니다. `literal_parts`가
+그것을 리터럴과 `Unknown`으로 갈라 놓습니다.
 
 ### 다른 파일의 상수는 2패스에서 채웁니다
 
@@ -511,33 +514,47 @@ rest.getForObject(ApiPaths.ORDERS, List.class);
 ```
 
 이 장의 코드는 파일 하나만 봅니다. 다른 파일의 선언을 알 수 없으므로 값을
-지우는 대신 **이름을 남깁니다.**
+포기하는 대신 **이름을 남깁니다.** 그것이 `Named`입니다.
 
 ```rust
-if is_plain_name(raw) {
-    out.push_str("${");
-    out.push_str(raw);
-    out.push('}');
-    *saw_literal = true;
-}
+[Named("ApiPaths.ORDERS")]
 ```
 
-그러면 경로가 `${ApiPaths.ORDERS}` 형태로 저장되고, [7장](07-resolve.md)에서
-본 인덱싱 2패스가 전체 파일의 상수를 합쳐 그 자리를 채웁니다. 참조를 해소할
-때 두 번 도는 이유와 같습니다. 다른 파일을 봐야 알 수 있는 것은 모든 파일을
-읽은 다음에야 처리할 수 있습니다.
+[7장](07-resolve.md)에서 본 인덱싱 2패스가 전체 파일의 상수를 합쳐 이 자리를
+채웁니다. 참조를 해소할 때 두 번 도는 이유와 같습니다. 다른 파일을 봐야 알 수
+있는 것은 모든 파일을 읽은 다음에야 처리할 수 있습니다.
 
-`*saw_literal = true`가 중요합니다. 이름도 값의 근거로 세지 않으면
-`getForObject(ApiPaths.ORDERS, ...)`처럼 이름만 있는 호출이 1패스에서 통째로
-버려집니다. 실제로 그렇게 만들었다가 고쳤습니다.
+```rust
+[Named("ApiPaths.ORDERS")]  →  fill  →  [Literal("/api/orders")]
+```
+
+표에 없으면 `Unknown`이 됩니다. 끝내 알 수 없는 값이라는 뜻입니다.
 
 같은 이름이 여러 파일에 다른 값으로 있으면 값을 확정하지 않습니다. `BASE`나
-`API_URL`은 흔해서 충돌하기 쉽습니다. 대신 `ApiPaths.ORDERS`처럼 클래스
-이름을 붙인 키도 함께 넣어 두므로, 한정해서 참조하면 정확히 해소됩니다.
+`API_URL`은 흔해서 충돌하기 쉽습니다. 대신 클래스 이름을 붙인 키도 함께 넣어
+두므로 `ApiPaths.ORDERS`처럼 한정해서 참조하면 정확히 해소됩니다.
 
-실측하면 전형적인 아홉 가지 형태 중 여섯 가지를 읽습니다. 남은 셋은
-설정에서 주입받는 값과 빌더 체이닝, 함수 반환값이며 정적으로는 알 수
+### 마지막에 한 번만 문자열로 만듭니다
+
+```rust
+{{#include ../../../crates/nunchi-core/src/framework.rs:render}}
+```
+
+**이 프로젝트에서 `{}` 표기를 만들어 내는 유일한 자리입니다.** 조립하는
+동안에는 그 기호가 코드에 나오지 않습니다.
+
+처음에는 조각을 문자열에 기호로 심어 두고 단계마다 다시 파싱했습니다.
+`"${ApiPaths.ORDERS}/${}"` 같은 문자열을 만들어 놓고 `${`를 찾아 가며
+읽는 방식이었습니다. 그러자 기호가 세 겹으로 겹쳤습니다. Spring이 쓰는
+`{id}`, 자바스크립트가 쓰는 `${id}`, 우리가 만든 `${}`가 같은 문자열
+공간에서 돌아다녔고, 코드만 봐서는 어느 것이 입력이고 어느 것이 중간
+표시인지 구분되지 않았습니다.
+
+조각을 타입으로 두면 그 문제가 사라집니다. 심을 기호가 없고 파싱할 일도
 없습니다.
+
+실측하면 전형적인 아홉 가지 형태 중 여섯 가지를 읽습니다. 남은 셋은 설정에서
+주입받는 값과 빌더 체이닝, 함수 반환값이며 정적으로는 알 수 없습니다.
 
 ### SQL에서 테이블을 뽑습니다
 

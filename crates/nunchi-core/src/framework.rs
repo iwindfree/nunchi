@@ -81,11 +81,113 @@ pub enum InjectKind {
     FinalField,
 }
 
+// ANCHOR: url_part
+/// 경로를 이루는 조각 하나.
+///
+/// 코드에 적힌 URL은 리터럴만인 경우가 드물다. 상수를 이어 붙이거나 변수를
+/// 끼워 넣는다. 그 구조를 문자열에 기호로 심어 두면 단계마다 다시 파싱해야
+/// 하므로, 조각인 채로 들고 다니다가 마지막에 한 번만 문자열로 만든다.
+#[derive(Debug, Clone, PartialEq)]
+pub enum UrlPart {
+    /// 코드에 그대로 적힌 부분
+    Literal(String),
+    /// 값을 알 수 없는 자리. 변수나 함수 호출이다.
+    Unknown,
+    /// 이름은 알지만 값은 아직 모른다. 경로 상수를 별도 파일에 모아 두는
+    /// 관례가 흔해서, 인덱싱 2패스가 전체 파일의 상수 표로 이 자리를 채운다.
+    Named(String),
+}
+// ANCHOR_END: url_part
+
+/// 조각으로 표현한 경로.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct UrlTemplate(Vec<UrlPart>);
+
+impl UrlTemplate {
+    // ANCHOR: url_template
+    /// 알 수 있는 것이 하나도 없으면 URL로 볼 수 없다.
+    /// `getForObject(props.getUrl(), ...)`처럼 값을 전혀 모르는 호출이다.
+    pub fn is_meaningful(&self) -> bool {
+        self.0.iter().any(|p| !matches!(p, UrlPart::Unknown))
+    }
+
+    /// 아직 값을 못 찾은 이름이 있는가. 있으면 2패스에서 채운다.
+    pub fn has_unresolved(&self) -> bool {
+        self.0.iter().any(|p| matches!(p, UrlPart::Named(_)))
+    }
+
+    /// 이름 자리를 상수 표의 값으로 채운다.
+    /// 표에 없으면 끝내 알 수 없는 값이므로 `Unknown`이 된다.
+    pub fn fill(&mut self, table: &std::collections::HashMap<String, String>) {
+        for part in self.0.iter_mut() {
+            if let UrlPart::Named(name) = part {
+                *part = match table.get(name.as_str()) {
+                    Some(value) if !value.is_empty() => UrlPart::Literal(value.clone()),
+                    _ => UrlPart::Unknown,
+                };
+            }
+        }
+    }
+
+    /// 경로를 확정할 수 없는가.
+    ///
+    /// 값을 모르는 자리가 세그먼트 하나를 통째로 차지하면 경로 파라미터로 본다.
+    /// Spring의 `/{id}`가 정규화된 결과와 같은 문자열이 되므로 라우트에 연결된다.
+    /// 세그먼트 중간에 끼어 있으면(`"/api/orders" + suffix`) 어떤 엔드포인트가
+    /// 되는지 알 수 없으므로 연결 대상에서 뺀다.
+    pub fn is_dynamic(&self) -> bool {
+        self.0.iter().enumerate().any(|(i, part)| {
+            if !matches!(part, UrlPart::Unknown) {
+                return false;
+            }
+            let left_ends = match i.checked_sub(1).and_then(|j| self.0.get(j)) {
+                Some(UrlPart::Literal(s)) => s.ends_with('/'),
+                _ => false,
+            };
+            let right_starts = match self.0.get(i + 1) {
+                Some(UrlPart::Literal(s)) => s.starts_with('/'),
+                None => true,
+                _ => false,
+            };
+            !(left_ends && right_starts)
+        })
+    }
+    // ANCHOR_END: url_template
+
+    // ANCHOR: render
+    /// 최종 경로 문자열. 값을 모르는 자리는 `{}`가 된다.
+    /// 이 프로젝트에서 `{}` 표기를 만들어 내는 유일한 자리다.
+    pub fn render(&self) -> String {
+        self.0
+            .iter()
+            .map(|p| match p {
+                UrlPart::Literal(s) => s.as_str(),
+                _ => "{}",
+            })
+            .collect()
+    }
+    // ANCHOR_END: render
+
+    /// 사람이 읽을 원문. 아직 못 채운 이름을 그대로 보여 준다.
+    pub fn describe(&self) -> String {
+        self.0
+            .iter()
+            .map(|p| match p {
+                UrlPart::Literal(s) => s.clone(),
+                UrlPart::Named(n) => format!("<{n}>"),
+                UrlPart::Unknown => "{}".to_string(),
+            })
+            .collect()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ApiCallFact {
     pub method: String,
     pub path: String,
     pub raw_path: String,
+    /// 경로 조각. 아직 못 채운 이름이 있으면 2패스가 이것으로 다시 만든다.
+    pub template: UrlTemplate,
     pub span: Span,
     /// 경로가 정적으로 결정되지 않는다 — 예: `` `/users${isRegister ? '' : '/login'}` ``.
     /// 치환이 경로 세그먼트 전체가 아니면 어떤 엔드포인트인지 알 수 없다.
@@ -751,22 +853,27 @@ fn api_call_of(
         return None;
     }
 
-    let raw = url_argument_at(args, src, url_arg, syntax, constants)?;
+    let template = url_argument_at(args, src, url_arg, syntax, constants)?;
+    // 알 수 있는 것이 하나도 없으면 어떤 경로인지 정할 수 없다.
+    if !template.is_meaningful() {
+        return None;
+    }
     // 도메인 경로처럼 보이지 않으면 버린다. `useState("")` 같은 오탐 방지.
     //
     // 다만 아직 값을 못 찾은 이름이 남아 있으면 여기서 판단할 수 없다.
     // 다른 파일에 선언된 상수일 수 있으므로 2패스로 미룬다.
-    if !has_unresolved_name(&raw) && !raw.starts_with('/') && !raw.contains("/api") {
+    let rendered = template.render();
+    if !template.has_unresolved() && !rendered.starts_with('/') && !rendered.contains("/api") {
         return None;
     }
 
-    let dynamic = has_dynamic_segment(&raw);
     Some(ApiCallFact {
         method,
-        path: normalize_route_path(&raw),
-        raw_path: raw,
+        path: rendered,
+        raw_path: template.describe(),
+        dynamic: template.is_dynamic(),
+        template,
         span: span_of(call),
-        dynamic,
     })
 }
 
@@ -784,6 +891,162 @@ fn has_function_argument(args: Node, syntax: &crate::rules::LangSyntax) -> bool 
         .any(|a| syntax.lambda.iter().any(|k| k == unwrap_argument(a, syntax).kind()))
 }
 
+/// 인자 노드 하나를 경로 조각들로 푼다.
+///
+/// 연결식은 왼쪽으로 중첩되므로 재귀로 내려간다. `"/a/" + x + "/b"`의 최상위
+/// 왼쪽이 또 연결식이라, 한 겹만 보면 리터럴을 찾지 못해 호출을 통째로 놓친다.
+fn url_template_of(
+    node: Node,
+    src: &[u8],
+    syntax: &crate::rules::LangSyntax,
+    constants: &std::collections::HashMap<String, String>,
+) -> UrlTemplate {
+    let mut parts = Vec::new();
+    collect_parts(node, src, syntax, constants, &mut parts);
+    UrlTemplate(parts)
+}
+
+// ANCHOR: collect_parts
+fn collect_parts(
+    node: Node,
+    src: &[u8],
+    syntax: &crate::rules::LangSyntax,
+    constants: &std::collections::HashMap<String, String>,
+    out: &mut Vec<UrlPart>,
+) {
+    if syntax.string.iter().any(|k| k == node.kind()) {
+        out.extend(literal_parts(&strip_string_affixes(text(node, src))));
+        return;
+    }
+    if syntax.concat.iter().any(|k| k == node.kind()) {
+        if let (Some(left), Some(right)) = (
+            node.child_by_field_name("left"),
+            node.child_by_field_name("right"),
+        ) {
+            collect_parts(left, src, syntax, constants, out);
+            collect_parts(right, src, syntax, constants, out);
+            return;
+        }
+    }
+    // `String.format("/api/orders/%s", id)` 처럼 형식 문자열로 만드는 경우
+    // 첫 인자가 곧 경로다.
+    if syntax.call.iter().any(|k| k == node.kind()) {
+        if let Some(parts) = format_call_parts(node, src, syntax) {
+            out.extend(parts);
+            return;
+        }
+    }
+    // 이름이면 값을 찾아본다. 같은 파일에 선언이 있으면 그 자리에서 값이 되고,
+    // 없으면 이름을 남겨 두었다가 2패스에서 다른 파일의 상수로 채운다.
+    if syntax.qualified_name.iter().any(|k| k == node.kind()) || node.kind() == "identifier" {
+        let name = text(node, src);
+        out.push(match constants.get(name) {
+            Some(value) => UrlPart::Literal(value.clone()),
+            None => UrlPart::Named(name.to_string()),
+        });
+        return;
+    }
+    out.push(UrlPart::Unknown);
+}
+// ANCHOR_END: collect_parts
+
+/// 문자열 리터럴 하나를 조각으로 나눈다.
+///
+/// 리터럴이라고 전부 고정된 것은 아니다. 보간 문법이 문자열 안에 들어 있다.
+/// 자바스크립트 템플릿 `` `/api/orders/${id}` ``, 파이썬 f-문자열
+/// `f"/api/orders/{id}"`, C# 보간 `$"/api/orders/{id}"`가 그렇다.
+/// Express나 react-router의 `:id` 표기도 같은 자리에 온다.
+fn literal_parts(raw: &str) -> Vec<UrlPart> {
+    let mut parts = Vec::new();
+    let mut literal = String::new();
+    let mut chars = raw.chars().peekable();
+    let mut push_unknown = |literal: &mut String, parts: &mut Vec<UrlPart>| {
+        if !literal.is_empty() {
+            parts.push(UrlPart::Literal(std::mem::take(literal)));
+        }
+        parts.push(UrlPart::Unknown);
+    };
+    while let Some(c) = chars.next() {
+        match c {
+            '$' if chars.peek() == Some(&'{') => {
+                chars.next();
+                for c in chars.by_ref() {
+                    if c == '}' {
+                        break;
+                    }
+                }
+                push_unknown(&mut literal, &mut parts);
+            }
+            '{' => {
+                for c in chars.by_ref() {
+                    if c == '}' {
+                        break;
+                    }
+                }
+                push_unknown(&mut literal, &mut parts);
+            }
+            // `/orders/:id` — 콜론 뒤 세그먼트 전체가 파라미터다.
+            ':' if literal.ends_with('/') => {
+                while chars.peek().is_some_and(|c| *c != '/') {
+                    chars.next();
+                }
+                push_unknown(&mut literal, &mut parts);
+            }
+            _ => literal.push(c),
+        }
+    }
+    if !literal.is_empty() {
+        parts.push(UrlPart::Literal(literal));
+    }
+    parts
+}
+
+/// 형식 문자열의 자리 표시자를 조각으로 나눈다.
+/// `%s`와 `%d`는 `String.format`이, `{}`와 `{0}`은 파이썬 `.format`과
+/// C# 보간이 쓴다.
+fn format_call_parts(
+    node: Node,
+    src: &[u8],
+    syntax: &crate::rules::LangSyntax,
+) -> Option<Vec<UrlPart>> {
+    let args = node.child_by_field_name("arguments")?;
+    let mut cursor = args.walk();
+    let first = args
+        .children(&mut cursor)
+        .map(|a| unwrap_argument(a, syntax))
+        .find(|a| syntax.string.iter().any(|k| k == a.kind()))?;
+    let raw = strip_string_affixes(text(first, src));
+    if !raw.starts_with('/') {
+        return None;
+    }
+    let mut parts = Vec::new();
+    let mut literal = String::new();
+    let mut chars = raw.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '%' if chars.peek().is_some_and(|c| c.is_ascii_alphabetic()) => {
+                chars.next();
+                parts.push(UrlPart::Literal(std::mem::take(&mut literal)));
+                parts.push(UrlPart::Unknown);
+            }
+            '{' => {
+                for c in chars.by_ref() {
+                    if c == '}' {
+                        break;
+                    }
+                }
+                parts.push(UrlPart::Literal(std::mem::take(&mut literal)));
+                parts.push(UrlPart::Unknown);
+            }
+            _ => literal.push(c),
+        }
+    }
+    if !literal.is_empty() {
+        parts.push(UrlPart::Literal(literal));
+    }
+    Some(parts)
+}
+
 /// `index`번째 실인자에서 URL 문자열을 뽑는다.
 fn url_argument_at(
     args: Node,
@@ -791,7 +1054,7 @@ fn url_argument_at(
     index: usize,
     syntax: &crate::rules::LangSyntax,
     constants: &std::collections::HashMap<String, String>,
-) -> Option<String> {
+) -> Option<UrlTemplate> {
     let mut cursor = args.walk();
     let mut position = 0usize;
     for arg in args.children(&mut cursor) {
@@ -799,33 +1062,19 @@ fn url_argument_at(
             continue;
         }
         if position == index {
-            return literal_url(unwrap_argument(arg, syntax), src, syntax, constants);
+            return Some(url_template_of(
+                unwrap_argument(arg, syntax),
+                src,
+                syntax,
+                constants,
+            ));
         }
         position += 1;
     }
     None
 }
 
-/// 문자열 리터럴이면 따옴표와 접두를 벗겨 돌려준다.
 ///
-/// Java의 `"/api/orders/" + id`처럼 이어 붙인 경우에는 앞쪽 리터럴만 알 수 있다.
-/// 그 리터럴이 슬래시로 끝나면 세그먼트 하나가 통째로 치환되는 형태이므로
-/// `{}`를 붙여 라우트와 맞춘다. 그렇지 않으면 어떤 경로가 되는지 알 수 없으므로
-/// `${}`를 붙여 동적으로 표시한다.
-fn literal_url(
-    node: Node,
-    src: &[u8],
-    syntax: &crate::rules::LangSyntax,
-    constants: &std::collections::HashMap<String, String>,
-) -> Option<String> {
-    let mut url = String::new();
-    let mut saw_literal = false;
-    collect_url_parts_with(node, src, syntax, Some(constants), &mut url, &mut saw_literal);
-    // 리터럴이 하나도 없으면 `getForObject(url, ...)` 처럼 변수만 넘긴 것이다.
-    // 어떤 경로인지 정적으로 알 수 없으므로 버린다.
-    saw_literal.then_some(url)
-}
-
 /// 이 선언을 감싸는 타입의 이름. `ApiPaths.ORDERS` 형태의 키를 만드는 데 쓴다.
 fn enclosing_type_name(node: Node, src: &[u8]) -> Option<String> {
     let mut cur = node.parent();
@@ -874,10 +1123,12 @@ fn collect_declarations(
         let name = node.child_by_field_name(&syntax.declaration_name_field);
         let value = node.child_by_field_name(&syntax.declaration_value_field);
         if let (Some(name), Some(value)) = (name, value) {
-            let mut text_out = String::new();
-            let mut saw_literal = false;
-            collect_url_parts(value, src, syntax, &mut text_out, &mut saw_literal);
-            if saw_literal {
+            // 선언된 값도 조각으로 푼다. 상수가 상수를 참조하는 경우까지
+            // 따라가지는 않으므로, 리터럴만으로 이루어진 것만 표에 넣는다.
+            let empty = std::collections::HashMap::new();
+            let template = url_template_of(value, src, syntax, &empty);
+            let text_out = template.render();
+            if template.is_meaningful() && !template.has_unresolved() {
                 // 같은 이름이 여러 번 선언되면 첫 번째를 쓴다. 재대입까지
                 // 추적하려면 흐름 분석이 필요하고, 그만한 이득이 없다.
                 let name = text(name, src).to_string();
@@ -896,179 +1147,6 @@ fn collect_declarations(
     for child in node.children(&mut cursor) {
         collect_declarations(child, src, syntax, table);
     }
-}
-
-/// 연결식을 훑어 경로를 조립한다.
-///
-/// 리터럴은 그대로 쓰고 변수 자리에는 `${}`를 남긴다. 그 표시를
-/// `has_dynamic_segment`가 읽어 세그먼트 하나가 통째로 치환되는 형태인지
-/// 판정하고, `normalize_route_path`가 `{}`로 정규화한다. TypeScript 템플릿
-/// 문자열이 이미 그 경로를 타므로 형태를 맞춘 것이다.
-///
-/// `"/api/articles/" + slug + "/comments"`는 왼쪽으로 중첩되므로 재귀로 내려간다.
-/// 왼쪽을 한 겹만 보면 리터럴을 찾지 못해 호출을 통째로 놓친다.
-fn collect_url_parts(
-    node: Node,
-    src: &[u8],
-    syntax: &crate::rules::LangSyntax,
-    out: &mut String,
-    saw_literal: &mut bool,
-) {
-    collect_url_parts_with(node, src, syntax, None, out, saw_literal)
-}
-
-fn collect_url_parts_with(
-    node: Node,
-    src: &[u8],
-    syntax: &crate::rules::LangSyntax,
-    constants: Option<&std::collections::HashMap<String, String>>,
-    out: &mut String,
-    saw_literal: &mut bool,
-) {
-    if syntax.string.iter().any(|k| k == node.kind()) {
-        out.push_str(&strip_string_affixes(text(node, src)));
-        *saw_literal = true;
-        return;
-    }
-    if syntax.concat.iter().any(|k| k == node.kind()) {
-        if let (Some(left), Some(right)) = (
-            node.child_by_field_name("left"),
-            node.child_by_field_name("right"),
-        ) {
-            collect_url_parts_with(left, src, syntax, constants, out, saw_literal);
-            collect_url_parts_with(right, src, syntax, constants, out, saw_literal);
-            return;
-        }
-    }
-    // `String.format("/api/orders/%s", id)` 처럼 형식 문자열로 만드는 경우
-    // 첫 인자가 곧 경로다. 자리 표시자를 `${}`로 바꿔 두면 아래 정규화가
-    // 나머지를 처리한다.
-    if syntax.call.iter().any(|k| k == node.kind()) {
-        if let Some(args) = node.child_by_field_name("arguments") {
-            let mut cursor = args.walk();
-            if let Some(first) = args
-                .children(&mut cursor)
-                .map(|a| unwrap_argument(a, syntax))
-                .find(|a| syntax.string.iter().any(|k| k == a.kind()))
-            {
-                let raw = strip_string_affixes(text(first, src));
-                if raw.starts_with('/') {
-                    out.push_str(&format_placeholders(&raw));
-                    *saw_literal = true;
-                    return;
-                }
-            }
-        }
-    }
-    // 이름이면 같은 파일의 선언에서 값을 찾아본다.
-    if let Some(table) = constants {
-        if let Some(value) = table.get(text(node, src)) {
-            out.push_str(value);
-            *saw_literal = true;
-            return;
-        }
-    }
-    // 여기까지 왔으면 이 파일에서는 값을 알 수 없다. 이름을 그대로 남겨 두면
-    // 인덱싱 2패스가 다른 파일의 상수 표에서 다시 찾아본다. 상수를 별도
-    // 파일에 모아 두는 관례가 흔하기 때문이다.
-    // 이름이 아닌 것(함수 호출 등)은 빈 표시만 남긴다.
-    let raw = text(node, src);
-    if is_plain_name(raw) {
-        out.push_str("${");
-        out.push_str(raw);
-        out.push('}');
-        // 이름도 값의 근거다. 2패스에서 채워질 수 있으므로 리터럴과 같이 센다.
-        // 그러지 않으면 `getForObject(ApiPaths.ORDERS, ...)`처럼 이름만 있는
-        // 호출이 1패스에서 통째로 버려진다.
-        *saw_literal = true;
-    } else {
-        out.push_str("${}");
-    }
-}
-
-/// 식별자나 `A.B` 형태의 한정 이름인지. 공백이나 괄호가 있으면 식이다.
-fn is_plain_name(raw: &str) -> bool {
-    !raw.is_empty()
-        && raw
-            .chars()
-            .all(|c| c.is_alphanumeric() || c == '_' || c == '.' || c == '$')
-}
-
-/// 아직 값을 찾지 못한 이름이 남아 있는가. `${}`는 알 수 없다는 표시이므로
-/// 세지 않고, `${ApiPaths.ORDERS}`처럼 이름이 든 것만 센다.
-pub fn has_unresolved_name(raw: &str) -> bool {
-    let mut rest = raw;
-    while let Some(start) = rest.find("${") {
-        let after = &rest[start + 2..];
-        if !after.starts_with('}') {
-            return true;
-        }
-        rest = after;
-    }
-    false
-}
-
-/// 경로에 남은 `${이름}` 자리를 상수 표의 값으로 채운다.
-///
-/// 1패스는 파일 하나만 보므로 다른 파일에 선언된 상수를 알 수 없다. 그런
-/// 이름을 지우지 않고 남겨 두었다가 인덱싱 2패스에서 이 함수로 채운다.
-/// 채운 것이 하나도 없으면 `None`을 돌려주어 호출한 쪽이 건너뛰게 한다.
-pub fn fill_constants(
-    raw: &str,
-    constants: &std::collections::HashMap<String, String>,
-) -> Option<String> {
-    if !raw.contains("${") {
-        return None;
-    }
-    let mut out = String::with_capacity(raw.len());
-    let mut rest = raw;
-    let mut filled = false;
-    while let Some(start) = rest.find("${") {
-        let Some(end) = rest[start..].find('}') else { break };
-        let name = &rest[start + 2..start + end];
-        out.push_str(&rest[..start]);
-        match constants.get(name) {
-            // 빈 문자열은 "이름이 겹쳐 값을 확정할 수 없다"는 표시다.
-            Some(value) if !value.is_empty() => {
-                out.push_str(value);
-                filled = true;
-            }
-            _ => {
-                // 못 찾은 이름은 알 수 없는 값으로 남긴다.
-                out.push_str("${}");
-            }
-        }
-        rest = &rest[start + end + 1..];
-    }
-    out.push_str(rest);
-    filled.then_some(out)
-}
-
-/// 형식 문자열의 자리 표시자를 `${}`로 바꾼다.
-///
-/// `%s`와 `%d`는 `String.format`과 파이썬 `%` 연산자가, `{}`와 `{0}`은
-/// 파이썬 `.format`과 C# 보간이 쓴다.
-fn format_placeholders(raw: &str) -> String {
-    let mut out = String::with_capacity(raw.len());
-    let mut chars = raw.chars().peekable();
-    while let Some(c) = chars.next() {
-        match c {
-            '%' if chars.peek().is_some_and(|c| c.is_ascii_alphabetic()) => {
-                chars.next();
-                out.push_str("${}");
-            }
-            '{' => {
-                for c in chars.by_ref() {
-                    if c == '}' {
-                        break;
-                    }
-                }
-                out.push_str("${}");
-            }
-            _ => out.push(c),
-        }
-    }
-    out
 }
 
 /// 문자열 리터럴의 접두와 따옴표를 벗긴다.
@@ -1526,32 +1604,66 @@ class Gateway {
         );
         assert_eq!(calls.len(), 1, "{calls:?}");
         assert_eq!(
-            calls[0].raw_path, "${ApiPaths.ORDERS}",
+            calls[0].template,
+            UrlTemplate(vec![UrlPart::Named("ApiPaths.ORDERS".into())]),
             "이름을 잃으면 2패스에서 찾을 수 없다"
         );
+        assert_eq!(calls[0].raw_path, "<ApiPaths.ORDERS>", "사람이 읽는 표기");
     }
 
     #[test]
-    fn a_name_that_is_never_declared_stays_unresolved() {
-        // 끝까지 선언을 못 찾으면 값을 알 수 없다. 인덱싱 2패스가 이런 호출을
-        // dynamic 으로 표시해 라우트 연결에서 뺀다.
-        let table = std::collections::HashMap::new();
-        assert!(
-            fill_constants("${NOWHERE}/items", &table).is_none(),
-            "채운 것이 없으면 None 이어야 한다"
-        );
+    fn a_name_that_is_never_declared_becomes_unknown() {
+        // 끝까지 선언을 못 찾으면 값을 알 수 없다. 그 자리는 `Unknown`이 되고,
+        // 세그먼트를 통째로 차지하지 않으므로 동적으로 판정된다.
+        let mut t = UrlTemplate(vec![
+            UrlPart::Named("NOWHERE".into()),
+            UrlPart::Literal("/items".into()),
+        ]);
+        t.fill(&std::collections::HashMap::new());
+        assert_eq!(t, UrlTemplate(vec![UrlPart::Unknown, UrlPart::Literal("/items".into())]));
+        assert_eq!(t.render(), "{}/items");
+        assert!(t.is_dynamic(), "앞을 모르면 어떤 엔드포인트인지 알 수 없다");
     }
 
     #[test]
-    fn java_concat_without_slash_is_dynamic() {
+    fn a_parameter_that_fills_a_whole_segment_is_not_dynamic() {
+        // `"/api/orders/" + id` 는 Spring 의 `/{id}` 가 정규화된 것과 같은
+        // 문자열이 되므로 라우트에 연결할 수 있다.
+        let whole = UrlTemplate(vec![
+            UrlPart::Literal("/api/orders/".into()),
+            UrlPart::Unknown,
+        ]);
+        assert_eq!(whole.render(), "/api/orders/{}");
+        assert!(!whole.is_dynamic());
+
+        // `"/api/orders" + suffix` 는 무엇이 붙느냐에 따라 경로가 달라진다.
+        let partial = UrlTemplate(vec![
+            UrlPart::Literal("/api/orders".into()),
+            UrlPart::Unknown,
+        ]);
+        assert_eq!(partial.render(), "/api/orders{}");
+        assert!(partial.is_dynamic());
+    }
+
+    #[test]
+    fn java_concat_without_slash_is_dynamic_after_the_second_pass() {
         // 슬래시 없이 이어 붙이면 어떤 엔드포인트가 되는지 알 수 없다.
+        //
+        // 다만 1패스에서는 아직 판정하지 않는다. `suffix`가 다른 파일에 선언된
+        // 상수일 수도 있기 때문이다. 2패스에서 값을 못 찾으면 그때 `Unknown`이
+        // 되고 동적으로 확정된다.
         let calls = calls_in(
             "java",
             tree_sitter_java::LANGUAGE.into(),
             r#"class C { void m() { rest.getForObject("/api/article" + suffix, String.class); } }"#,
         );
         assert_eq!(calls.len(), 1, "{calls:?}");
-        assert!(calls[0].dynamic, "경로를 확정할 수 없으므로 동적이어야 한다");
+        assert!(calls[0].template.has_unresolved(), "이름이 남아 있어야 한다");
+
+        let mut t = calls[0].template.clone();
+        t.fill(&std::collections::HashMap::new());
+        assert!(t.is_dynamic(), "값을 못 찾았으므로 경로를 확정할 수 없다");
+        assert_eq!(t.render(), "/api/article{}");
     }
 
     #[test]

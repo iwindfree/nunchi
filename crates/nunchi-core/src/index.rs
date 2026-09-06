@@ -85,6 +85,8 @@ struct ApiCallSite {
     path: String,
     raw_path: String,
     dynamic: bool,
+    /// 경로 조각. 아직 못 채운 이름이 있으면 2패스가 이것으로 경로를 다시 만든다.
+    template: framework::UrlTemplate,
 }
 
 struct PendingFile {
@@ -192,7 +194,7 @@ pub fn index_all_with_cache(
     // 파일 하나만 보므로 그런 이름을 `${ApiPaths.ORDERS}` 형태로 남겨 둔다.
     // 여기서 전체 파일의 상수를 합쳐 그것을 채운다.
     let mut constants: HashMap<String, String> = HashMap::new();
-    let mut updated: HashMap<NodeId, (String, String)> = HashMap::new();
+    let mut updated: HashMap<NodeId, (String, String, bool)> = HashMap::new();
     for file in &pending {
         for (name, value) in &file.fw.string_constants {
             // 같은 이름이 여러 파일에 있으면 값을 확정할 수 없다. 잘못된 좌표를
@@ -211,21 +213,21 @@ pub fn index_all_with_cache(
     }
     for file in &mut pending {
         for site in &mut file.api_call_ids {
-            if !framework::has_unresolved_name(&site.raw_path) {
+            if !site.template.has_unresolved() {
                 continue;
             }
             let was_dynamic = site.dynamic;
-            let filled = framework::fill_constants(&site.raw_path, &constants)
-                .unwrap_or_else(|| site.raw_path.clone());
+            site.template.fill(&constants);
+            let rendered = site.template.render();
             // 채우고도 경로처럼 보이지 않으면 어떤 엔드포인트인지 알 수 없다.
             // 노드는 남기되 라우트 연결에서 빼서 연결 실패로 세지 않는다.
-            if !filled.starts_with('/') && !filled.contains("/api") {
+            if !rendered.starts_with('/') && !rendered.contains("/api") {
                 site.dynamic = true;
                 continue;
             }
-            site.path = framework::normalize_route_path(&filled);
-            site.dynamic = framework::has_dynamic_segment(&filled);
-            site.raw_path = filled;
+            site.path = rendered;
+            site.dynamic = site.template.is_dynamic();
+            site.raw_path = site.template.describe();
             stats.api_calls_resolved_late += 1;
             // 1패스는 이름이 남아 있는 경로를 동적으로 셌다. 값을 채워
             // 경로가 확정되었으므로 집계를 옮긴다.
@@ -235,14 +237,27 @@ pub fn index_all_with_cache(
             }
             // 노드는 1패스에서 이미 만들어졌으므로 표시도 함께 고친다.
             // 그러지 않으면 TUI와 팩에 미해결 상태의 경로가 남는다.
-            updated.insert(site.id.clone(), (site.method.clone(), site.path.clone()));
+            updated.insert(
+                site.id.clone(),
+                (site.method.clone(), site.path.clone(), site.dynamic),
+            );
+        }
+        // 값을 못 찾아 동적으로 바뀐 것도 노드에 반영해야 한다.
+        for site in &file.api_call_ids {
+            if site.dynamic && !updated.contains_key(&site.id) {
+                updated.insert(
+                    site.id.clone(),
+                    (site.method.clone(), site.path.clone(), true),
+                );
+            }
         }
     }
     if !updated.is_empty() {
         for node in nodes.iter_mut() {
-            if let Some((method, path)) = updated.get(&node.id) {
+            if let Some((method, path, dynamic)) = updated.get(&node.id) {
                 node.name = format!("{method} {path}");
                 node.signature = Some(node.name.clone());
+                node.attrs = serde_json::json!({ "dynamic": dynamic });
             }
         }
     }
@@ -567,6 +582,7 @@ fn extract_framework(
             path: call.path.clone(),
             raw_path: call.raw_path.clone(),
             dynamic: call.dynamic,
+            template: call.template.clone(),
         });
         if call.dynamic {
             stats.api_calls_dynamic += 1;
